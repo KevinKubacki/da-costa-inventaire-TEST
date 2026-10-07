@@ -9,6 +9,9 @@ var IC = {
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21h4"/>',
   inv: '<path d="M9 4h6l1 2h3v15H5V6h3z"/><path d="M9 12l2 2 4-4"/>',
   eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  replay: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M10 9l5 3-5 3z"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>', check: '<path d="M5 12l5 5 9-10"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>', edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
@@ -359,13 +362,14 @@ SCREENS.home = function () {
   var M = D(), u = me(), patron = isPatron();
   var d = new Date();
   var recent = M.moves.filter(function (m) { return m.type !== 'depart' || m.qui; }).slice(0, 5);
-  var html = '<div class="screen"><header class="head home-head"><div class="brand"><img src="icons/toit-blanc.png" alt="">' +
+  var html = '<div class="screen"><div class="home-fixed"><header class="head home-head"><div class="brand"><img src="icons/toit-blanc.png" alt="">' +
     '<div><b>' + esc((M.reg.entreprise || 'Da Costa').replace(/^EURL\s+/i, '').toUpperCase()) + '</b><span>Stock atelier</span></div>' +
     '<button class="gear" data-a="go" data-r="reglages" aria-label="Réglages">' + ic('gear') + '</button></div>' +
     '<div class="hello">Salut ' + esc(u.nom) + '</div><div class="sub">' + JOURS[d.getDay()] + ' ' + d.getDate() + ' ' + MOIS_LONG[d.getMonth()] + ' · qu\'est-ce que tu fais ?</div></header>' +
     '<div class="big-actions"><button class="big out" data-a="startMv" data-m="S">' + ic('minus') + '<div><b>SORTIE</b><span>Je prends du matériel</span></div></button>' +
+    '<button class="mic-home" data-a="vxOpen" aria-label="Parler à l\'appli"><span class="mh-ring"></span>' + ic('mic') + '</button>' +
     '<button class="big in" data-a="startMv" data-m="E">' + ic('plus') + '<div><b>ENTRÉE</b><span>Je range une livraison</span></div></button></div>' +
-    syncBar() + '<div class="scroll">' +
+    syncBar() + '</div><div class="scroll">' +
     '<div class="tiles"><button class="tile" data-a="nav" data-r="stock"><b>' + M.prods.length + '</b><span>produits</span></button>' +
     '<button class="tile ' + (M.alertes.length ? 'warn' : '') + '" data-a="nav" data-r="commandes"><b>' + M.alertes.length + '</b><span>à commander</span></button>' +
     '<button class="tile ' + (M.zeros.length ? 'bad' : '') + '" data-a="stockFilter" data-f="zero"><b>' + M.zeros.length + '</b><span>à zéro</span></button></div>';
@@ -1037,6 +1041,7 @@ SCREENS.reglages = function () {
         '<p style="font-size:13px;color:var(--muted);margin:8px 0 0">' + fmo(fi.octets) + ' de factures' + (fi.driveLimite ? ' · Google Drive : ' + fgo(fi.driveUtilise) + ' utilisés sur ' + fgo(fi.driveLimite) : '') + '. Rangées dans le dossier « Factures » à côté du Google Sheet.</p>'
         : '<p id="finfo" style="font-size:13px;color:var(--muted);margin:4px 0 0">Calcul de la place utilisée…</p>') + '</div>';
   }
+  if (patron && typeof voixCard === 'function') html += voixCard();
   html += '<div class="card"><div class="card-title"><h2>Synchronisation</h2>' + (SYNC.err ? '<span class="badge rupt">problème</span>' : OUTBOX.length ? '<span class="badge bas">en cours</span>' : '<span class="badge ok">à jour</span>') + '</div>' +
     '<div class="kv"><span>Dernier échange avec le Google Sheet</span><span>' + lastTxt + '</span></div>' +
     '<div class="kv"><span>Modifications en attente</span><span>' + OUTBOX.length + '</span></div>' +

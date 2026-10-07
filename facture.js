@@ -93,7 +93,9 @@ A.fRead = function () {
   FACT.busy = true; FACT.err = ''; FACT.step = 0; render(true);
   clearInterval(FACT.timer);
   FACT.timer = setInterval(function () { FACT.step++; if (VIEW.r === 'facture') render(false); }, 5000);
-  call('facture', [CFG.code, { files: FACT.pages.map(function (p) { return { mime: p.mime, data: p.data }; }) }], 150000)
+  archivePages(FACT.pages).then(function (archive) {
+    return call('facture', [CFG.code, { files: FACT.pages.map(function (p) { return { mime: p.mime, data: p.data }; }), archive: archive }], 150000);
+  })
     .then(function (doc) {
       clearInterval(FACT.timer); FACT.busy = false;
       if (!doc.est_document_achat && !(doc.lignes || []).length) { FACT.err = 'Ce document ne ressemble pas à une facture de matériel.'; render(false); return; }
@@ -112,6 +114,39 @@ A.fRead = function () {
       render(false);
     });
 };
+
+/* ---------------- archive légère : pages en JPEG (1600 px, très lisibles) ---------------- */
+
+var ARCH_W = 1600, ARCH_Q = 0.72;
+function canvasJpeg(src, w, h) {
+  var k = Math.min(1, ARCH_W / w), c = document.createElement('canvas');
+  c.width = Math.round(w * k); c.height = Math.round(h * k);
+  var cx = c.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, c.width, c.height); cx.drawImage(src, 0, 0, c.width, c.height);
+  return { mime: 'image/jpeg', data: c.toDataURL('image/jpeg', ARCH_Q).split(',')[1] };
+}
+/** Les pages à garder dans le Drive : photos réduites, PDF transformés en images (10 pages max). Échec = on garde l'original. */
+function archivePages(pages) {
+  var out = [];
+  var chain = Promise.resolve();
+  pages.forEach(function (p) {
+    chain = chain.then(function () {
+      if (!/pdf/i.test(p.mime)) return loadImg(p.thumb || ('data:' + p.mime + ';base64,' + p.data)).then(function (img) { out.push(canvasJpeg(img, img.naturalWidth, img.naturalHeight)); });
+      return loadPdfJs().then(function (lib) { return lib.getDocument({ data: pdfBytes(p.data) }).promise; }).then(function (pdf) {
+        var c2 = Promise.resolve();
+        for (var n = 1; n <= Math.min(pdf.numPages, 10); n++) (function (n) {
+          c2 = c2.then(function () { return pdf.getPage(n); }).then(function (pg) {
+            var v0 = pg.getViewport({ scale: 1 }), vp = pg.getViewport({ scale: ARCH_W / v0.width });
+            var c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+            var cx = c.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, c.width, c.height);
+            return pg.render({ canvasContext: cx, viewport: vp }).promise.then(function () { out.push(canvasJpeg(c, c.width, c.height)); });
+          });
+        })(n);
+        return c2;
+      });
+    });
+  });
+  return chain.then(function () { return out; }).catch(function (e) { console.warn('archive', e && e.message); return []; });
+}
 
 /* ---------------- logo du fournisseur ---------------- */
 
@@ -560,10 +595,25 @@ A.fShare = function (d) {
   var liens = (f.fichiers || '').split(' ').filter(Boolean); if (!liens.length) return;
   toast('Préparation…', 'Je récupère l\'original');
   Promise.all(liens.map(getOriginal)).then(function (rs) {
-    var files = rs.map(function (r) { return new File([b64Blob(r)], r.nom || 'Facture', { type: r.mime }); });
     var titre = 'Facture ' + (fourName(f.fournisseur) || '') + (f.numero ? ' n° ' + f.numero : '');
+    var files = rs.every(function (r) { return /^image\//.test(r.mime); }) && window.jspdf ? [imagesToPdf(rs, titre)] :
+      rs.map(function (r) { return new File([b64Blob(r)], r.nom || 'Facture', { type: r.mime }); });
     if (navigator.canShare && navigator.canShare({ files: files })) return navigator.share({ files: files, title: titre, text: titre }).catch(function () {});
     files.forEach(function (fl) { var a = document.createElement('a'); a.href = URL.createObjectURL(fl); a.download = fl.name; document.body.appendChild(a); a.click(); a.remove(); });
     toast('Téléchargé', 'Le fichier est dans tes téléchargements');
   }).catch(function (e) { toast('Partage impossible', e.message || String(e)); });
 };
+
+/** Pages images → un seul PDF (A4) pour l'envoyer au comptable comme une vraie facture. */
+function imagesToPdf(rs, titre) {
+  var doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4', compress: true });
+  rs.forEach(function (r, i) {
+    if (i) doc.addPage();
+    var props = doc.getImageProperties('data:' + r.mime + ';base64,' + r.data);
+    var W = 210, H = 297, m = 6, k = Math.min((W - 2 * m) / props.width, (H - 2 * m) / props.height);
+    var w = props.width * k, h = props.height * k;
+    doc.addImage('data:' + r.mime + ';base64,' + r.data, 'JPEG', (W - w) / 2, m, w, h);
+  });
+  var nom = titre.replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim() + '.pdf';
+  return new File([doc.output('blob')], nom, { type: 'application/pdf' });
+}
