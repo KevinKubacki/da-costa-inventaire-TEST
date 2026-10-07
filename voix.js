@@ -38,7 +38,13 @@ function voiceName() { return (D().reg.voix || '').trim() || 'Achird'; }
 
 // Phrases toujours identiques : fabriquées une seule fois (gardées dans le Drive par le script ET dans le téléphone) → dites sans attente.
 var PHRASE_ESSAI = 'Salut ! C\'est moi qui te répondrai dans l\'appli.';
-var PHRASE_OK = 'C\'est rangé !';
+// Confirmations après « Valider » : elles tournent (jamais deux fois la même d'affilée), chacune gardée après sa 1re fois
+var PHRASES_OK = ['Voilà, c\'est fait !', 'C\'est bon, c\'est enregistré.', 'Pas de souci, c\'est bon, c\'est fait.'];
+function phraseOk(avancer) {
+  var i = 0; try { i = (+localStorage.getItem(NS + 'okTour') || 0) % PHRASES_OK.length; } catch (e) {}
+  if (avancer) try { localStorage.setItem(NS + 'okTour', String((i + 1) % PHRASES_OK.length)); } catch (e) {}
+  return PHRASES_OK[i];
+}
 var PHRASE_REPETE = 'Je n\'ai pas bien compris, tu peux répéter ?';
 var VCACHE = 'stock-voix:' + (typeof NS !== 'undefined' ? NS : '');
 function phoneCacheGet(key) {
@@ -398,7 +404,7 @@ A.vxToggle = function () {
     saveVox(); VX.st = 'idle'; VX.append = false;
     go('voixVerif', {}, { replace: true });
     speak(VOX.reponse);
-    cachedVoice(PHRASE_OK, voiceName());                          // « C'est rangé ! » chargé s'il est déjà connu
+    cachedVoice(phraseOk(), voiceName());                         // la confirmation suivante, chargée si déjà connue
   }).catch(function (e) {
     VX.st = 'err';
     VX.err = e.code === 'NOKEY' ? 'La clé Gemini n\'est pas installée dans le script.' : e.code === 'QUOTA' ? 'Trop de demandes à Gemini pour le moment : réessaie dans une minute.' : (e.message || 'Problème de connexion.');
@@ -633,7 +639,7 @@ A.voxValidate = function () {
   VOX = null; saveVox();
   toast('C\'est fait', n + ' ligne' + (n > 1 ? 's' : '') + (inv && V.mode === 'inv' ? ' comptée' + (n > 1 ? 's' : '') + ' dans le recomptage' : ' enregistrée' + (n > 1 ? 's' : '')));
   go('home', {}, { replace: true });
-  speak(PHRASE_OK, { fixe: true });
+  speak(phraseOk(true), { fixe: true });
 };
 
 /* ================= Réglages : voix de l'appli ================= */
@@ -658,5 +664,5 @@ A.vxOpen = function () {
   audioCtx(); recCancel(); VX = { st: 'idle', mode: 'mvt', err: '', said: '', append: false }; go('voix', {});
   call('ping', [CFG.code], 15000).catch(function () {});        // réveille le script dès l'ouverture
   liveToken().catch(function () {});                            // jeton de voix prêt à l'avance
-  cachedVoice(PHRASE_OK, voiceName());
+  cachedVoice(phraseOk(), voiceName());
 };
