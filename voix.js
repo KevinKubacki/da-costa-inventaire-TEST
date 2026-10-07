@@ -11,7 +11,7 @@ function saveVox() { if (VOX) LS.set('voxverif', VOX); else LS.del('voxverif'); 
 
 /* ================= lecture audio (voix de l'appli) ================= */
 
-var AUD = { ctx: null, src: null, an: null, raf: 0, cache: {}, playing: false };
+var AUD = { ctx: null, src: null, an: null, raf: 0, cache: {}, playing: false, tok: 0, gain: null };
 /** Contexte audio unique, « débloqué » pendant un appui de Jimmy (règle des navigateurs). */
 function audioCtx() {
   if (!AUD.ctx) { var C = window.AudioContext || window.webkitAudioContext; if (!C) return null; AUD.ctx = new C(); }
@@ -34,47 +34,240 @@ function toWav(r) {
   out.set(wavHeader(u.length, rate), 0); out.set(u, 44);
   return out;
 }
-function voiceName() { return (D().reg.voix || '').trim(); }
-/** Demande la voix au script (mise en cache : une même phrase n'est demandée qu'une fois). */
-function fetchVoice(text) {
-  var key = voiceName() + '|' + text;
+function voiceName() { return (D().reg.voix || '').trim() || 'Achird'; }
+
+// Phrases toujours identiques : fabriquées une seule fois (gardées dans le Drive par le script ET dans le téléphone) → dites sans attente.
+var PHRASE_ESSAI = 'Salut ! C\'est moi qui te répondrai dans l\'appli.';
+var PHRASE_OK = 'C\'est rangé !';
+var PHRASE_REPETE = 'Je n\'ai pas bien compris, tu peux répéter ?';
+var VCACHE = 'stock-voix:' + (typeof NS !== 'undefined' ? NS : '');
+function phoneCacheGet(key) {
+  if (!window.caches) return Promise.resolve(null);
+  return caches.open(VCACHE).then(function (c) { return c.match('/voix/' + encodeURIComponent(key)); }).then(function (r) { return r ? r.arrayBuffer() : null; }).catch(function () { return null; });
+}
+function phoneCachePut(key, bytes) {
+  if (!window.caches) return;
+  caches.open(VCACHE).then(function (c) { return c.put('/voix/' + encodeURIComponent(key), new Response(bytes, { headers: { 'content-type': 'audio/wav' } })); }).catch(function () {});
+}
+function decodeWav(bytes) {
+  var ctx = audioCtx(); if (!ctx) return Promise.reject(new Error('Son indisponible'));
+  var ab = bytes instanceof ArrayBuffer ? bytes.slice(0) : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  return new Promise(function (res, rej) { ctx.decodeAudioData(ab, res, rej); });
+}
+/** Demande la voix au script (mise en cache : une même phrase n'est demandée qu'une fois). `fixe` = phrase toujours identique. */
+function fetchVoice(text, fixe, voix) {
+  voix = voix || voiceName();
+  var key = voix + '|' + text;
   if (!AUD.cache[key]) {
-    AUD.cache[key] = call('parler', [CFG.code, { texte: text, voix: voiceName() }], 60000).then(function (r) {
-      var ctx = audioCtx(); if (!ctx) throw new Error('Son indisponible');
-      var wav = toWav(r);
-      return new Promise(function (res, rej) { ctx.decodeAudioData(wav.buffer.slice(0), res, rej); });
+    var t0 = Date.now();
+    AUD.cache[key] = (fixe ? phoneCacheGet(key) : Promise.resolve(null)).then(function (hit) {
+      if (hit) return decodeWav(hit);
+      return call('parler', [CFG.code, { texte: text, voix: voix, garder: !!fixe }], 60000).then(function (r) {
+        var wav = toWav(r); AUD.lastMs = Date.now() - t0;
+        if (fixe) phoneCachePut(key, wav);
+        return decodeWav(wav);
+      });
     });
     AUD.cache[key].catch(function () { delete AUD.cache[key]; });
   }
   return AUD.cache[key];
 }
+/** Coupe la voix tout de suite (et annule celle qui était en train d'arriver). */
 function stopSpeak() {
+  AUD.tok++;
   if (AUD.src) { try { AUD.src.onended = null; AUD.src.stop(); } catch (e) {} AUD.src = null; }
-  cancelAnimationFrame(AUD.raf); AUD.playing = false; waveIdle();
+  liveStopAll();
+  cancelAnimationFrame(AUD.raf); AUD.playing = false; waveIdle(); setSpeakState('');
 }
-/** Dit la phrase avec la voix Gemini ; les barres d'onde suivent le son en direct. */
-function speak(text) {
-  if (!text) return Promise.resolve(false);
-  stopSpeak();
-  setSpeakState('load');
-  return fetchVoice(text).then(function (buf) {
-    var ctx = audioCtx(); stopSpeak();
-    var src = ctx.createBufferSource(), an = ctx.createAnalyser(); an.fftSize = 256;
+function waveLoop(an) {
+  var data = new Uint8Array(an.frequencyBinCount);
+  cancelAnimationFrame(AUD.raf);
+  (function loop() {
+    if (!AUD.playing) return;
+    an.getByteFrequencyData(data);
+    var bars = document.querySelectorAll('.wave i');
+    for (var i = 0; i < bars.length; i++) { var v = data[2 + i * 3] / 255; bars[i].style.transform = 'scaleY(' + (0.18 + v * 1.1).toFixed(2) + ')'; }
+    AUD.raf = requestAnimationFrame(loop);
+  })();
+}
+function playBuffer(buf, tok) {
+  return new Promise(function (res) {
+    if (tok !== AUD.tok) { res(false); return; }
+    var ctx = audioCtx(), src = ctx.createBufferSource(), an = ctx.createAnalyser(); an.fftSize = 256;
     src.buffer = buf; src.connect(an); an.connect(ctx.destination);
     AUD.src = src; AUD.an = an; AUD.playing = true; setSpeakState('play');
-    var data = new Uint8Array(an.frequencyBinCount);
-    (function loop() {
-      if (!AUD.playing) return;
-      an.getByteFrequencyData(data);
-      var bars = document.querySelectorAll('.wave i');
-      for (var i = 0; i < bars.length; i++) { var v = data[2 + i * 3] / 255; bars[i].style.transform = 'scaleY(' + (0.18 + v * 1.1).toFixed(2) + ')'; }
-      AUD.raf = requestAnimationFrame(loop);
-    })();
-    return new Promise(function (res) { src.onended = function () { AUD.playing = false; AUD.src = null; cancelAnimationFrame(AUD.raf); waveIdle(); setSpeakState(''); res(true); }; src.start(); });
-  }).catch(function (e) { setSpeakState('err'); return false; });
+    waveLoop(an);
+    src.onended = function () { if (AUD.src === src) { AUD.src = null; AUD.playing = false; cancelAnimationFrame(AUD.raf); waveIdle(); } res(tok === AUD.tok); };
+    src.start();
+  });
+}
+
+/* ---------- voix EN DIRECT (API Live de Gemini : gratuite, sans limite par jour, le son arrive en continu) ---------- */
+
+var LIVE = { token: null, exp: 0, model: '', tokP: null, ready: null, readyVoice: '', cur: null, srcs: [], off: 0 };
+var LIVE_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=';
+var LIVE_CONSIGNE = 'Tu es la voix d\'une application de gestion de stock pour un artisan couvreur. Chaque message que tu reçois est un texte à DIRE À VOIX HAUTE : prononce-le exactement, mot pour mot, en français, avec une voix naturelle, chaleureuse et détendue, un débit vif. N\'ajoute rien, ne réponds pas, ne pose aucune question, ne commente pas.';
+function liveToken() {
+  if (LIVE.token && LIVE.exp - Date.now() > 60000) return Promise.resolve(LIVE.token);
+  if (!LIVE.tokP) LIVE.tokP = call('jetonVoix', [CFG.code], 20000).then(function (r) { LIVE.token = r.jeton; LIVE.exp = r.expire; LIVE.model = r.modele; LIVE.tokP = null; return r.jeton; },
+    function (e) { LIVE.tokP = null; throw e; });
+  return LIVE.tokP;
+}
+/** Ouvre une session Live (connexion + réglages) ; prête quand Google répond « setupComplete ». */
+function liveOpen(voice) {
+  return liveToken().then(function (token) {
+    return new Promise(function (res, rej) {
+      var ws, done = false;
+      try { ws = new WebSocket(LIVE_URL + encodeURIComponent(token)); } catch (e) { rej(e); return; }
+      var timer = setTimeout(function () { if (!done) { done = true; try { ws.close(); } catch (e) {} rej(new Error('live-timeout')); } }, 7000);
+      ws.onopen = function () {
+        ws.send(JSON.stringify({ setup: { model: 'models/' + (LIVE.model || 'gemini-3.8-live'),
+          generationConfig: { responseModalities: ['AUDIO'], temperature: 0.2, speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } },
+          systemInstruction: { parts: [{ text: LIVE_CONSIGNE }] } } }));
+      };
+      ws.onmessage = function (ev) {
+        liveData(ev).then(function (m) {
+          if (!done && m && m.setupComplete) { done = true; clearTimeout(timer); ws.onmessage = null; res(ws); }
+        });
+      };
+      ws.onerror = function () { if (!done) { done = true; clearTimeout(timer); rej(new Error('live-ws')); } };
+      ws.onclose = function (ev) { if (!done) { done = true; clearTimeout(timer); if (ev && ev.code === 1008) LIVE.token = null; rej(new Error('live-close ' + (ev && ev.code))); } };
+    });
+  });
+}
+function liveData(ev) {
+  var d = ev.data;
+  var txt = typeof d === 'string' ? Promise.resolve(d) : d && d.text ? d.text() : d instanceof ArrayBuffer ? Promise.resolve(new TextDecoder().decode(d)) : Promise.resolve('');
+  return txt.then(function (t) { try { return JSON.parse(t); } catch (e) { return null; } });
+}
+/** Prépare une session à l'avance (pendant que Gemini réfléchit) : la voix part dès que le texte est prêt. */
+function livePrepare(voice) {
+  voice = voice || voiceName();
+  if (LIVE.off > Date.now()) return Promise.reject(new Error('live-off'));
+  if (LIVE.ready && LIVE.readyVoice === voice) return LIVE.ready;
+  if (LIVE.ready) LIVE.ready.then(function (ws) { try { ws.close(); } catch (e) {} }, function () {});
+  LIVE.readyVoice = voice;
+  LIVE.ready = liveOpen(voice);
+  LIVE.ready.catch(function () { LIVE.ready = null; });
+  return LIVE.ready;
+}
+function liveStopAll() {
+  LIVE.srcs.forEach(function (s) { try { s.onended = null; s.stop(); } catch (e) {} }); LIVE.srcs = [];
+  if (LIVE.cur) { try { LIVE.cur.close(); } catch (e) {} LIVE.cur = null; }
+}
+/** Dit le texte par l'API Live : le son est joué AU FUR ET À MESURE qu'il arrive. Renvoie le son complet (pour Réécouter). */
+function speakLive(text, voice, tok, t0) {
+  return livePrepare(voice).then(function (ws) {
+    LIVE.ready = null;                               // cette session est consommée
+    if (tok !== AUD.tok) { try { ws.close(); } catch (e) {} return false; }
+    LIVE.cur = ws;
+    var ctx = audioCtx(), an = ctx.createAnalyser(); an.fftSize = 256; an.connect(ctx.destination); AUD.an = an;
+    var next = 0, started = false, pcm = [], rate = 24000;
+    return new Promise(function (res, rej) {
+      var first = setTimeout(function () { if (!started) { try { ws.close(); } catch (e) {} rej(new Error('lent')); } }, 7000);
+      var finish = function () {
+        clearTimeout(first);
+        var wait = Math.max(0, (next - ctx.currentTime) * 1000) + 60;
+        setTimeout(function () {
+          if (tok === AUD.tok) { AUD.playing = false; cancelAnimationFrame(AUD.raf); waveIdle(); }
+          // tout le son reçu → gardé pour « Réécouter » (sans redemander)
+          var n = 0; pcm.forEach(function (c) { n += c.length; });
+          var all = new Float32Array(n), o = 0; pcm.forEach(function (c) { all.set(c, o); o += c.length; });
+          var buf = n ? ctx.createBuffer(1, n, rate) : null; if (buf) buf.copyToChannel(all, 0);
+          res(buf || false);
+        }, wait);
+        try { ws.close(); } catch (e) {} if (LIVE.cur === ws) LIVE.cur = null;
+      };
+      ws.onmessage = function (ev) {
+        liveData(ev).then(function (m) {
+          if (!m || tok !== AUD.tok) return;
+          var sc = m.serverContent;
+          if (sc && sc.modelTurn && sc.modelTurn.parts) sc.modelTurn.parts.forEach(function (p) {
+            var id = p.inlineData || p.inline_data; if (!id || !id.data) return;
+            var mm = /rate=(\d+)/.exec(id.mimeType || id.mime_type || ''); if (mm) rate = +mm[1];
+            var u = b64Bytes(id.data), n = Math.floor(u.length / 2), f = new Float32Array(n), dv = new DataView(u.buffer);
+            for (var i = 0; i < n; i++) f[i] = dv.getInt16(i * 2, true) / 32768;
+            pcm.push(f);
+            var b = ctx.createBuffer(1, n, rate); b.copyToChannel(f, 0);
+            var src = ctx.createBufferSource(); src.buffer = b; src.connect(an);
+            if (!started) { started = true; clearTimeout(first); next = ctx.currentTime + 0.06; AUD.playing = true; setSpeakState('play'); waveLoop(an); AUD.firstMs = Date.now() - t0; AUD.via = 'direct'; showTiming(); }
+            if (next < ctx.currentTime) next = ctx.currentTime + 0.02;
+            src.start(next); next += b.duration; LIVE.srcs.push(src);
+          });
+          if (sc && (sc.turnComplete || sc.generationComplete)) finish();
+        });
+      };
+      ws.onclose = function () { if (LIVE.cur === ws) { LIVE.cur = null; if (started) finish(); else rej(new Error('live-close')); } };
+      ws.send(JSON.stringify({ realtimeInput: { text: text } }));
+    });
+  });
+}
+
+/** Son déjà connu (mémoire ou téléphone) pour cette phrase et cette voix ? */
+function cachedVoice(text, voix) {
+  var key = voix + '|' + text;
+  if (AUD.mem && AUD.mem[key]) return Promise.resolve(AUD.mem[key]);
+  return phoneCacheGet(key).then(function (b) { return b ? decodeWav(b).then(function (buf) { (AUD.mem = AUD.mem || {})[key] = buf; return buf; }) : null; }).catch(function () { return null; });
+}
+function bufferToWav(buf) {
+  var f = buf.getChannelData(0), pcm = new Uint8Array(f.length * 2), dv = new DataView(pcm.buffer);
+  for (var i = 0; i < f.length; i++) { var v = Math.max(-1, Math.min(1, f[i])); dv.setInt16(i * 2, v < 0 ? v * 0x8000 : v * 0x7FFF, true); }
+  var out = new Uint8Array(44 + pcm.length); out.set(wavHeader(pcm.length, buf.sampleRate), 0); out.set(pcm, 44); return out;
+}
+/**
+ * Dit la phrase. Ordre : 1) déjà connue (instantané)  2) voix EN DIRECT (Live, sans limite)  3) ancienne voix (limitée)  4) texte seul.
+ * Une nouvelle demande coupe la précédente.
+ */
+function speak(text, opt) {
+  opt = opt || {};
+  stopSpeak();
+  if (!text) return Promise.resolve(false);
+  var tok = AUD.tok, t0 = Date.now(), voix = opt.voix || voiceName(), key = voix + '|' + text;
+  setSpeakState('load');
+  return cachedVoice(text, voix).then(function (buf) {
+    if (tok !== AUD.tok) return false;
+    if (buf) { AUD.firstMs = Date.now() - t0; AUD.via = 'mémoire'; showTiming(); return playBuffer(buf, tok); }
+    return speakLive(text, voix, tok, t0).then(function (full) {
+      if (full && full.length) { (AUD.mem = AUD.mem || {})[key] = full; if (opt.fixe) phoneCachePut(key, bufferToWav(full)); }
+      return !!full;
+    }, function (e) {
+      if (tok !== AUD.tok) return false;
+      if (!/lent/.test(e && e.message || '')) LIVE.off = Date.now() + 60000;     // la voix en direct ne marche pas : on n'insiste pas pendant 1 min
+      // repli : l'ancienne voix (limitée à quelques phrases par jour)
+      var limite = new Promise(function (res, rej) { setTimeout(function () { rej(new Error('lent')); }, 15000); });
+      return Promise.race([fetchVoice(text, opt.fixe, voix), limite]).then(function (b) {
+        AUD.firstMs = Date.now() - t0; AUD.via = 'secours'; showTiming();
+        (AUD.mem = AUD.mem || {})[key] = b; return playBuffer(b, tok);
+      });
+    });
+  }).then(function (ok) { if (tok === AUD.tok) setSpeakState(''); return ok; })
+    .catch(function (e) {
+      if (tok !== AUD.tok) return false;
+      var el = document.querySelector('#vxSay .say-err');
+      if (el) el.textContent = e && e.code === 'QUOTA_JOUR' ? 'Voix indisponible pour le moment : tout est écrit ci-dessus.' : e && e.code === 'QUOTA' ? 'Voix en pause une minute : tout est écrit ci-dessus.' : e && e.message === 'lent' ? 'La voix met trop de temps : tout est écrit ci-dessus. Réessaie « Réécouter » dans un instant.' : 'La voix n\'a pas pu être chargée : tout est écrit ci-dessus.';
+      setSpeakState('err');
+      if (VIEW.r === 'reglages') toast('Voix indisponible', 'Réessaie dans un instant');
+      return false;
+    });
 }
 function waveIdle() { var bars = document.querySelectorAll('.wave i'); for (var i = 0; i < bars.length; i++) bars[i].style.transform = ''; }
-function setSpeakState(s) { var el = document.getElementById('vxSay'); if (el) el.setAttribute('data-s', s); }
+function setSpeakState(s) {
+  var el = document.getElementById('vxSay'); if (el) el.setAttribute('data-s', s);
+  var vs = document.querySelectorAll('.voix-grid button.load'); if (s !== 'load') for (var i = 0; i < vs.length; i++) vs[i].classList.remove('load');
+}
+/** Version TEST : temps mesurés, pour régler la rapidité avec Kevin. */
+function showTiming() {
+  if (!IS_TEST) return;
+  var el = document.getElementById('vxTiming'); if (!el || !VOX) return;
+  el.textContent = 'compris en ' + (VOX.ms / 1000).toFixed(1) + ' s' + (AUD.firstMs ? ' · voix (' + (AUD.via || '') + ') en ' + (AUD.firstMs / 1000).toFixed(1) + ' s' : '');
+}
+// la voix s'arrête dès qu'on change d'écran
+(function () {
+  var last = null;
+  window.addEventListener('popstate', function () { stopSpeak(); });
+  var orig = window.render;
+  if (typeof orig === 'function') window.render = function () { if (last !== VIEW.r) { if (last !== null) stopSpeak(); last = VIEW.r; } return orig.apply(this, arguments); };
+})();
 
 /* ================= enregistrement du micro (avec le halo) ================= */
 
@@ -176,13 +369,14 @@ A.vxToggle = function () {
   var r = recStop();
   if (!r || r.sec < 0.6) { VX.st = 'err'; VX.err = 'Je n\'ai rien entendu. Appuie une fois, parle, puis rappuie.'; render(false); return; }
   VX.st = 'think'; render(false);
+  livePrepare(voiceName()).catch(function () {});      // la voix se connecte pendant que Gemini réfléchit
   var t0 = Date.now();
-  call('voix', [CFG.code, { audio: r.data, mime: 'audio/wav', mode: VX.mode }], 120000).then(function (doc) {
+  call('voix', [CFG.code, { audio: r.data, mime: 'audio/wav', mode: VX.mode, ctx: voixCtx() }], 120000).then(function (doc) {
     VX.said = doc.transcription || '';
     var lignes = doc.lignes || [];
     if (!doc.comprehensible || !lignes.length) {
       VX.st = 'err'; VX.err = 'Je n\'ai pas compris de produit. Réessaie en disant la quantité et le produit.';
-      render(false); speak(doc.reponse || 'Je n\'ai pas bien compris, tu peux répéter ?');
+      render(false); speak(PHRASE_REPETE, { fixe: true });
       return;
     }
     var nv = buildVox(doc);
@@ -197,7 +391,8 @@ A.vxToggle = function () {
     VOX.ms = Date.now() - t0;
     saveVox(); VX.st = 'idle'; VX.append = false;
     go('voixVerif', {}, { replace: true });
-    speak(VOX.reponse).then(function () { if (VOX && VOX.confirmation) fetchVoice(VOX.confirmation).catch(function () {}); });
+    speak(VOX.reponse);
+    cachedVoice(PHRASE_OK, voiceName());                          // « C'est rangé ! » chargé s'il est déjà connu
   }).catch(function (e) {
     VX.st = 'err';
     VX.err = e.code === 'NOKEY' ? 'La clé Gemini n\'est pas installée dans le script.' : e.code === 'QUOTA' ? 'Trop de demandes à Gemini pour le moment : réessaie dans une minute.' : (e.message || 'Problème de connexion.');
@@ -213,11 +408,12 @@ function buildVox(doc) {
   var ok = function (id) { return id && M.prod[id] && M.prod[id].actif !== '0' ? id : ''; };
   var four = doc.fournisseur_id && M.four[doc.fournisseur_id] && M.four[doc.fournisseur_id].actif !== '0' ? doc.fournisseur_id : (doc.fournisseur ? matchFour({ fournisseur: doc.fournisseur }) : '');
   var lignes = (doc.lignes || []).map(function (l, i) {
-    var op = l.action === 'sortie' || l.action === 'compte' ? l.action : 'entree';
+    var op = ['sortie', 'compte', 'supprimer', 'dupliquer'].indexOf(l.action) >= 0 ? l.action : 'entree';
     var L = { k: 'l' + i, op: op, qte: Math.abs(num(l.quantite)), dit: String(l.dit || '').trim(), pid: '', cands: [], statut: 'new',
       nom: upName(l.nom_propose || l.dit), famille: M.fam[l.famille_proposee] ? l.famille_proposee : (M.fams[0] ? M.fams[0].id : ''), source: '' };
     if (!(L.qte >= 0) || (op !== 'compte' && !L.qte)) L.qte = op === 'compte' ? 0 : 1;
     var al = M.alias[voxKey(L.dit)], pid = ok(l.produit_id), others = (l.autres_ids || []).map(ok).filter(Boolean);
+    if (op === 'supprimer' || op === 'dupliquer') return mvLine(L, l.mouvement_id, pid);
     if (al && ok(al.produit)) { L.pid = al.produit; L.statut = 'ok'; L.source = 'appris'; }
     else if (pid && num(l.confiance) >= 0.8) { L.pid = pid; L.statut = 'ok'; }
     else if (pid) { L.statut = 'check'; L.cands = [pid].concat(others.filter(function (x) { return x !== pid; })).slice(0, 3); }
@@ -227,10 +423,34 @@ function buildVox(doc) {
   return { source: 'voix', mode: VX.mode, four: four, fourNom: String(doc.fournisseur || '').trim(), chantier: String(doc.chantier || '').trim(),
     transcription: String(doc.transcription || ''), reponse: String(doc.reponse || ''), confirmation: String(doc.confirmation || 'C\'est noté !'), lignes: lignes };
 }
+/* --- revenir sur un mouvement déjà enregistré (supprimer / refaire) --- */
+function mvById(id) { return D().moves.filter(function (m) { return m.id === id; })[0] || null; }
+function mvAllowed(L, m) {
+  if (!m || m.type === 'depart') return false;
+  if (L.op === 'dupliquer') return true;
+  return isPatron() || (m.qui === ME && (Date.now() - (parseIso(m.date) || 0)) < 864e5);   // même règle qu'à la main
+}
+function mvDesc(m) {
+  var d = num(m.delta);
+  return ({ entree: 'Entrée', sortie: 'Sortie', ajust: 'Correction' }[m.type] || m.type) + ' ' + (d > 0 ? '+' : '−') + fq(Math.abs(d)) + ' · ' + mvSub(m);
+}
+function mvLine(L, mid, pid) {
+  var m = mvById(mid);
+  L.qte = m ? Math.abs(num(m.delta)) : L.qte;
+  if (m) { L.mid = m.id; L.pid = m.produit; L.statut = mvAllowed(L, m) ? 'ok' : 'refus'; return L; }
+  // pas trouvé : on propose les derniers mouvements (de ce produit si on le connaît)
+  var recent = D().moves.filter(function (x) { return x.type !== 'depart' && (!pid || x.produit === pid) && mvAllowed(L, x); }).slice(0, 4);
+  L.statut = 'check'; L.mvc = true; L.cands = recent.map(function (x) { return x.id; });
+  return L;
+}
 function voxLine(k) { return VOX && VOX.lignes.filter(function (l) { return l.k === k; })[0]; }
 function voxPending() { return VOX ? VOX.lignes.filter(function (l) { return l.statut === 'check' || l.statut === 'new'; }).length : 0; }
-var OPS = { entree: { s: '+', lab: 'Entrée', cls: 'in' }, sortie: { s: '−', lab: 'Sortie', cls: 'out' }, compte: { s: '=', lab: 'Recomptage', cls: 'adj' } };
-function voxAfter(l, q) { return l.op === 'entree' ? q + l.qte : l.op === 'sortie' ? q - l.qte : l.qte; }
+var OPS = { entree: { s: '+', lab: 'Entrée', cls: 'in' }, sortie: { s: '−', lab: 'Sortie', cls: 'out' }, compte: { s: '=', lab: 'Recomptage', cls: 'adj' },
+  supprimer: { s: '✕', lab: 'Supprimer', cls: 'del' }, dupliquer: { s: '×2', lab: 'Refaire', cls: 'dup' } };
+function voxAfter(l, q) {
+  if (l.op === 'supprimer' || l.op === 'dupliquer') { var m = mvById(l.mid), d = m ? num(m.delta) : 0; return l.op === 'supprimer' ? q - d : q + d; }
+  return l.op === 'entree' ? q + l.qte : l.op === 'sortie' ? q - l.qte : l.qte;
+}
 
 SCREENS.voixVerif = function () {
   if (!VOX) return SCREENS.voix({});
@@ -243,16 +463,22 @@ SCREENS.voixVerif = function () {
   html += '<div class="say" id="vxSay" data-s=""><div class="say-top"><span class="wave">' + '<i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>' + '</span><span class="say-lab">à voix haute</span>' +
     '<button class="small-btn" data-a="voxReplay">' + ic('replay') + 'Réécouter</button></div>' +
     '<p class="say-txt">' + esc(V.reponse) + '</p>' + (V.transcription ? '<p class="say-you">Tu as dit : « ' + esc(V.transcription) + ' »</p>' : '') +
-    '<p class="say-err">La voix n\'a pas pu être chargée (connexion ou quota Gemini) : tout est écrit ci-dessus.</p></div>';
+    (IS_TEST ? '<p class="say-ms" id="vxTiming">' + (V.ms ? 'compris en ' + (V.ms / 1000).toFixed(1) + ' s' : '') + '</p>' : '') + '<p class="say-err">La voix n\'a pas pu être chargée (connexion ou quota Gemini) : tout est écrit ci-dessus.</p></div>';
   if (hasIn && V.fourNom && !V.four) {
     html += '<div class="vcard check"><div class="vhead"><span class="dot check"></span><span>Fournisseur dit : <b>' + esc(V.fourNom) + '</b></span></div>' +
       '<span class="vq check">Il n\'est pas dans ta liste.</span><div class="btn-row"><button class="btn light" style="height:46px" data-a="voxFourNew">Ajouter</button><button class="btn light" style="height:46px" data-a="voxFourPick">Choisir</button></div>' +
       '<div class="vmini"><button data-a="voxFourNone">Sans fournisseur</button></div></div>';
   }
-  var order = { check: 0, new: 1, create: 2, ok: 3, skip: 4 };
+  var order = { check: 0, new: 1, create: 2, ok: 3, refus: 4, skip: 5 };
   V.lignes.slice().sort(function (a, b) { return order[a.statut] - order[b.statut]; }).forEach(function (l) {
     var o = OPS[l.op], said = '<span class="vsrc">Tu as dit : <b>' + esc(l.dit) + '</b> · ' + o.lab.toLowerCase() + ' ' + o.s + ' ' + fq(l.qte) + '</span>';
-    if (l.statut === 'check') {
+    if (l.mvc && l.statut === 'check') {
+      html += '<div class="vcard check"><div class="vhead"><span class="dot check"></span><span class="vsrc">Tu as dit : <b>' + esc(l.dit) + '</b> · ' + o.lab.toLowerCase() + '</span></div><span class="vq check">Quel mouvement ?</span>' +
+        (l.cands.length ? l.cands.map(function (id) { var m = mvById(id), pr = m && M.prod[m.produit]; return m ? '<button class="vcand" data-a="voxPickMv" data-k="' + l.k + '" data-id="' + id + '">' + esc(pr ? pr.nom : '?') + ' <span>· ' + esc(mvDesc(m)) + '</span></button>' : ''; }).join('') : '<span class="vsrc">Aucun mouvement récent trouvé.</span>') +
+        '<div class="vmini"><button data-a="voxSkip" data-k="' + l.k + '">Retirer</button></div></div>';
+    } else if (l.statut === 'refus') {
+      html += '<div class="vcard skip"><span class="vsrc"><b>' + esc(l.dit) + '</b> : tu ne peux supprimer que tes propres mouvements de moins de 24 h (demande à Jimmy).</span><button class="link" data-a="voxSkip" data-k="' + l.k + '">OK</button></div>';
+    } else if (l.statut === 'check') {
       html += '<div class="vcard check"><div class="vhead"><span class="dot check"></span>' + said + '</div><span class="vq check">Je pense que c\'est :</span>' +
         l.cands.map(function (pid, i) { return '<button class="vcand ' + (i === 0 ? 'best' : '') + '" data-a="voxPick" data-k="' + l.k + '" data-id="' + pid + '">' + esc(M.prod[pid].nom) + ' <span>· stock ' + fq(M.stock[pid] || 0) + '</span></button>'; }).join('') +
         '<div class="vmini"><button data-a="voxOther" data-k="' + l.k + '">Autre produit…</button><button data-a="voxToNew" data-k="' + l.k + '">C\'est un nouveau</button><button data-a="voxSkip" data-k="' + l.k + '">Retirer</button></div></div>';
@@ -266,8 +492,9 @@ SCREENS.voixVerif = function () {
       html += '<div class="vcard skip"><span class="vsrc">Retirée : <b>' + esc(l.dit) + '</b></span><button class="link" data-a="voxUnskip" data-k="' + l.k + '">Reprendre</button></div>';
     } else {
       var p = l.statut === 'create' ? { nom: l.nom } : M.prod[l.pid], q = l.statut === 'create' ? 0 : (M.stock[l.pid] || 0);
-      var info = [o.lab, l.op === 'entree' && V.four ? fourName(V.four) : '', l.op === 'sortie' && V.chantier ? 'Chantier ' + V.chantier : '', l.source === 'appris' ? 'reconnu (déjà dit)' : ''].filter(Boolean).join(' · ');
-      html += '<button class="vcard ok vxl" data-a="voxMenu" data-k="' + l.k + '"><span class="vxq ' + o.cls + '">' + o.s + fq(l.qte) + '</span><span class="grow"><span class="t">' + esc(p ? p.nom : '?') +
+      var mvm = l.mid ? mvById(l.mid) : null;
+      var info = mvm ? o.lab + ' : ' + mvDesc(mvm) : [o.lab, l.op === 'entree' && V.four ? fourName(V.four) : '', l.op === 'sortie' && V.chantier ? 'Chantier ' + V.chantier : '', l.source === 'appris' ? 'reconnu (déjà dit)' : ''].filter(Boolean).join(' · ');
+      html += '<button class="vcard ok vxl" data-a="voxMenu" data-k="' + l.k + '"><span class="vxq ' + o.cls + '">' + (mvm ? o.s : o.s + fq(l.qte)) + '</span><span class="grow"><span class="t">' + esc(p ? p.nom : '?') +
         (l.statut === 'create' ? ' <span class="badge" style="background:#DCE6FF;color:#1E3A8A">nouveau</span>' : '') + '</span>' +
         '<span class="s">' + esc(info) + ' · stock ' + fq(q) + ' → ' + fq(voxAfter(l, q)) + '</span></span></button>';
     }
@@ -282,7 +509,22 @@ SCREENS.voixVerif = function () {
 };
 function voxSet(k, fn) { var l = voxLine(k); if (!l) return; fn(l); saveVox(); render(false); }
 A.voxReplay = function () { audioCtx(); if (VOX) speak(VOX.reponse); };
+/** Ce que le téléphone sait déjà (catalogue, stock, fournisseurs, familles) : envoyé avec la voix, le script n'a plus à lire le Sheet. */
+function voixCtx() {
+  var M = D();
+  return {
+    catalogue: M.prods.map(function (p) { return p.id + ' | ' + upName(p.nom) + ' | ' + p.famille + ' | ' + round3(M.stock[p.id] || 0) + (p.four && M.four[p.four] ? ' | ' + M.four[p.four].nom : ''); }).join('\n'),
+    fournisseurs: M.foursActifs.map(function (f) { return f.id + ' | ' + f.nom; }).join('\n'),
+    familles: M.fams.map(function (f) { return f.id + ' | ' + f.nom; }).join('\n'),
+    mouvements: M.moves.filter(function (m) { return m.type !== 'depart'; }).slice(0, 30).map(function (m) {
+      var pr = M.prod[m.produit], d = num(m.delta);
+      return m.id + ' | ' + fdate(m.date) + ' | ' + ({ entree: 'entrée', sortie: 'sortie', ajust: 'correction' }[m.type] || m.type) + ' | ' + (d > 0 ? '+' : '−') + fq(Math.abs(d)) +
+        ' | ' + (pr ? upName(pr.nom) : '?') + ' | ' + (m.type === 'entree' && m.fournisseur ? fourName(m.fournisseur) : (m.lieu || '')) + ' | ' + userName(m.qui);
+    }).join('\n')
+  };
+}
 A.voxBack = function () { A.voxCancel(); };
+A.voxPickMv = function (d) { voxSet(d.k, function (l) { var m = mvById(d.id); if (!m) return; l.mid = m.id; l.pid = m.produit; l.qte = Math.abs(num(m.delta)); l.statut = 'ok'; l.mvc = false; }); };
 A.voxPick = function (d) { voxSet(d.k, function (l) { l.pid = d.id; l.statut = 'ok'; l.source = ''; }); };
 A.voxSkip = function (d) { voxSet(d.k, function (l) { l.prev = l.statut; l.statut = 'skip'; }); };
 A.voxUnskip = function (d) { voxSet(d.k, function (l) { l.statut = l.pid ? 'ok' : (l.prev === 'create' ? 'create' : 'new'); }); };
@@ -301,7 +543,15 @@ A.voxNameOk = function (d) {
   closeSheet(function () { voxSet(d.k, function (l) { if (nm) l.nom = nm; l.famille = fm; }); });
 };
 A.voxMenu = function (d) {
-  var l = voxLine(d.k), nm = l.statut === 'create' ? l.nom : (D().prod[l.pid] || {}).nom || '';
+  var l0 = voxLine(d.k);
+  if (l0.mid) {
+    var m0 = mvById(l0.mid);
+    openSheet('<h3>' + OPS[l0.op].lab + '</h3><p>' + esc(m0 ? ((D().prod[m0.produit] || {}).nom || '') + ' · ' + mvDesc(m0) : '') + '</p>' +
+      '<button class="menu-item" data-a="voxMvOther" data-k="' + l0.k + '">' + ic('history') + 'Un autre mouvement</button>' +
+      '<button class="menu-item" data-a="voxSkipSheet" data-k="' + l0.k + '">' + ic('x') + 'Retirer cette ligne</button>');
+    return;
+  }
+  var l = l0, nm = l.statut === 'create' ? l.nom : (D().prod[l.pid] || {}).nom || '';
   openSheet('<h3>' + esc(nm) + '</h3><p>Tu as dit : ' + esc(l.dit) + '</p>' +
     '<div class="seg3">' + ['entree', 'sortie', 'compte'].map(function (op) { return '<button class="' + (l.op === op ? 'on ' + OPS[op].cls : '') + '" data-a="voxOp" data-k="' + l.k + '" data-op="' + op + '">' + OPS[op].s + ' ' + OPS[op].lab + '</button>'; }).join('') + '</div>' +
     '<button class="menu-item" data-a="voxQty" data-k="' + l.k + '">' + ic('edit') + 'Modifier la quantité (' + fq(l.qte) + ')</button>' +
@@ -309,6 +559,7 @@ A.voxMenu = function (d) {
     (l.statut === 'create' ? '<button class="menu-item" data-a="voxRename" data-k="' + l.k + '">' + ic('tag') + 'Changer le nom ou la famille</button>' : '') +
     '<button class="menu-item" data-a="voxSkipSheet" data-k="' + l.k + '">' + ic('x') + 'Retirer cette ligne</button>');
 };
+A.voxMvOther = function (d) { closeSheet(function () { voxSet(d.k, function (l) { var pid = l.pid; l.mid = ''; mvLine(l, '', pid); }); }); };
 A.voxOp = function (d) { closeSheet(function () { voxSet(d.k, function (l) { l.op = d.op; }); }); };
 A.voxChange = function (d) { closeSheet(function () { A.voxOther(d); }); };
 A.voxRename = function (d) { closeSheet(function () { A.voxName(d); }); };
@@ -344,6 +595,12 @@ A.voxValidate = function () {
   V.lignes.forEach(function (l) {
     if (l.statut !== 'ok' && l.statut !== 'create') return;
     var pid = l.pid;
+    if (l.op === 'supprimer' || l.op === 'dupliquer') {
+      var mv = mvById(l.mid); if (!mv) return;
+      if (l.op === 'supprimer') ops.push(del('Mouvements', mv.id));
+      else ops.push(put('Mouvements', { id: uid('m'), date: now, produit: mv.produit, delta: mv.delta, type: mv.type, qui: ME, lieu: mv.lieu || '', fournisseur: mv.fournisseur || '', prix: mv.prix || '', note: 'voix' }));
+      n++; return;
+    }
     if (l.statut === 'create') {
       pid = uid('p');
       ops.push(put('Produits', { id: pid, nom: upName(l.nom), famille: l.famille, unite: '', seuil: '0', four: l.op === 'entree' && V.four ? V.four : '', ref: '', notes: '', actif: '1', cree: now }));
@@ -357,25 +614,33 @@ A.voxValidate = function () {
     n++;
   });
   commit(ops);
-  var conf = V.confirmation || 'C\'est noté !';
   VOX = null; saveVox();
   toast('C\'est fait', n + ' ligne' + (n > 1 ? 's' : '') + (inv && V.mode === 'inv' ? ' comptée' + (n > 1 ? 's' : '') + ' dans le recomptage' : ' enregistrée' + (n > 1 ? 's' : '')));
   go('home', {}, { replace: true });
-  speak(conf);
+  speak(PHRASE_OK, { fixe: true });
 };
 
 /* ================= Réglages : voix de l'appli ================= */
 
-var VOIX_CHOIX = [['Achird', 'amicale'], ['Puck', 'enjouée'], ['Charon', 'posée'], ['Algenib', 'grave'], ['Sulafat', 'chaleureuse'], ['Kore', 'ferme']];
+var VOIX_CHOIX = [['Achird', 'amical', 'h'], ['Puck', 'enjoué', 'h'], ['Charon', 'posé', 'h'], ['Algenib', 'grave', 'h'],
+  ['Sulafat', 'chaleureuse', 'f'], ['Kore', 'ferme', 'f'], ['Aoede', 'légère', 'f'], ['Leda', 'jeune', 'f']];
 function voixCard() {
   var cur = voiceName() || 'Achird';
+  var btn = function (v) { return '<button class="' + v[2] + (v[0] === cur ? ' on' : '') + '" data-a="voixPick" data-v="' + v[0] + '"><b>' + v[0] + '</b><span>' + v[1] + '</span></button>'; };
   return '<div class="card"><div class="card-title"><h2>Voix de l\'appli</h2></div><p style="font-size:13px;color:var(--muted);margin:2px 0 10px">Une vraie voix (Gemini), pas celle du téléphone. Touche pour écouter et choisir.</p>' +
-    '<div class="voix-grid">' + VOIX_CHOIX.map(function (v) { return '<button class="' + (v[0] === cur ? 'on' : '') + '" data-a="voixPick" data-v="' + v[0] + '"><b>' + v[0] + '</b><span>' + v[1] + '</span></button>'; }).join('') + '</div></div>';
+    '<div class="voix-lab h">Voix d\'homme</div><div class="voix-grid">' + VOIX_CHOIX.filter(function (v) { return v[2] === 'h'; }).map(btn).join('') + '</div>' +
+    '<div class="voix-lab f">Voix de femme</div><div class="voix-grid">' + VOIX_CHOIX.filter(function (v) { return v[2] === 'f'; }).map(btn).join('') + '</div></div>';
 }
 A.voixPick = function (d) {
-  audioCtx();
-  commit(put('Reglages', { id: 'voix', valeur: d.v })); render(false);
-  toast('Voix ' + d.v, 'Écoute…');
-  speak('Salut ' + (me() ? me().nom : '') + ' ! C\'est moi qui te répondrai dans l\'appli. Plus dix coudes de quatre-vingts, c\'est noté.');
+  audioCtx(); stopSpeak();
+  if (voiceName() !== d.v) commit(put('Reglages', { id: 'voix', valeur: d.v }));
+  var grid = document.querySelector('.voix-grid');
+  if (grid) { [].forEach.call(document.querySelectorAll('.voix-grid button'), function (b) { b.classList.toggle('on', b.getAttribute('data-v') === d.v); b.classList.remove('load'); }); var me_ = document.querySelector('.voix-grid [data-v="' + d.v + '"]'); if (me_) me_.classList.add('load'); }
+  speak(PHRASE_ESSAI, { fixe: true, voix: d.v });
 };
-A.vxOpen = function () { audioCtx(); recCancel(); VX = { st: 'idle', mode: 'mvt', err: '', said: '', append: false }; go('voix', {}); };
+A.vxOpen = function () {
+  audioCtx(); recCancel(); VX = { st: 'idle', mode: 'mvt', err: '', said: '', append: false }; go('voix', {});
+  call('ping', [CFG.code], 15000).catch(function () {});        // réveille le script dès l'ouverture
+  liveToken().catch(function () {});                            // jeton de voix prêt à l'avance
+  cachedVoice(PHRASE_OK, voiceName());
+};
