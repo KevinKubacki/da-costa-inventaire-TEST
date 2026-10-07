@@ -78,6 +78,7 @@ var AFTER = [];
 
 window.onDataChange = function (local) {
   if (local) return;
+  migrateNames();
   if (VIEW.r === 'boot') { route0(); return; }
   if (isTyping() || SHEET) { PENDING_RENDER = true; return; }
   render(false);
@@ -93,6 +94,15 @@ function route0() {
   if (!LOADED) { render(false); return; }
   VIEW = { r: me() ? 'home' : 'login', p: {} };
   saveView(); render(true);
+}
+
+/** Une seule fois : met les noms des produits existants au même format (MAJUSCULES). Fait par le téléphone du patron. */
+function migrateNames() {
+  if (!LOADED || !isPatron() || D().reg.nomsMaj === '1') return;
+  var ops = [];
+  D().allProds.forEach(function (p) { var n = upName(p.nom); if (n && n !== p.nom) ops.push(put('Produits', { id: p.id, nom: n })); });
+  ops.push(put('Reglages', { id: 'nomsMaj', valeur: '1' }));
+  commit(ops);
 }
 
 /* ================= briques d'écran ================= */
@@ -190,6 +200,7 @@ function openSheet(html, opt) {
   ov.addEventListener('click', function (e) { if (e.target === ov) closeSheet(); });
   document.body.appendChild(ov);
   SHEET = { el: ov, onClose: opt && opt.onClose };
+  var tst = document.querySelector('.toast'); if (tst) tst.classList.add('top');   // ne pas cacher les boutons de la fenêtre
   try { history.pushState({ r: VIEW.r, p: VIEW.p, sheet: 1 }, ''); } catch (e) {}
   var f = ov.querySelector('[autofocus]'); if (f) setTimeout(function () { f.focus(); if (f.select) f.select(); }, 60);
   return ov;
@@ -234,7 +245,7 @@ function askNumber(o) {
 var TOAST_T = null;
 function toast(title, sub, undo) {
   var old = document.querySelector('.toast'); if (old) old.remove();
-  var t = document.createElement('div'); t.className = 'toast'; t.setAttribute('role', 'status');
+  var t = document.createElement('div'); t.className = 'toast' + (SHEET ? ' top' : ''); t.setAttribute('role', 'status');
   t.innerHTML = ic('check') + '<div class="grow"><b>' + esc(title) + '</b>' + (sub ? '<span>' + esc(sub) + '</span>' : '') + '</div>' + (undo ? '<button>Annuler</button>' : '');
   if (undo) t.querySelector('button').onclick = function () { t.remove(); undo(); };
   document.body.appendChild(t);
@@ -326,7 +337,7 @@ A.pinKey = function (d) {
   }
   render(false);
 };
-function loginAs(id) { ME = id; LS.set('user', id); go('home', {}, { replace: true }); }
+function loginAs(id) { ME = id; LS.set('user', id); migrateNames(); go('home', {}, { replace: true }); }
 
 /* ================= accueil ================= */
 SCREENS.home = function () {
@@ -618,7 +629,7 @@ var UNITES = ['pièce', 'mètre', 'ml', 'm²', 'boîte', 'paquet', 'rouleau', 'k
 SCREENS.edit = function (p) {
   var M = D(), f = p.f; if (!f) { go('stock', {}, { replace: true }); return ''; }
   var html = '<div class="screen">' + head({ title: f.isNew ? 'Nouveau produit' : 'Modifier le produit' }) + '<div class="scroll nonav">' +
-    '<div class="field"><label for="fnom">Nom du produit</label><input id="fnom" class="inp" data-i="f" data-k="nom" autocomplete="off" placeholder="ex. Crochet de gouttière Ø33 inox" value="' + esc(f.nom) + '"></div>' +
+    '<div class="field"><label for="fnom">Nom du produit <span class="help">(enregistré en MAJUSCULES)</span></label><input id="fnom" class="inp" style="text-transform:uppercase" data-i="f" data-k="nom" autocomplete="off" placeholder="EX. CROCHET DE GOUTTIÈRE Ø33 INOX" value="' + esc(f.nom) + '"></div>' +
     '<div class="field"><span class="flabel">Famille</span><div class="chips wrap">' + M.fams.map(function (x) {
       return '<button class="chip ' + (f.famille === x.id ? 'on' : '') + '" data-a="fSet" data-k="famille" data-v="' + x.id + '">' + esc(x.nom) + '</button>'; }).join('') +
     '<button class="chip" data-a="newFam">+ Nouvelle</button></div></div>' +
@@ -683,7 +694,7 @@ A.newFam = function () {
 };
 A.saveProd = function () {
   var f = VIEW.p.f, M = D();
-  var nom = (f.nom || '').trim();
+  var nom = upName(f.nom);
   if (!nom) { toast('Il manque le nom du produit'); var el = document.getElementById('fnom'); if (el) el.focus(); return; }
   var lines = f.lines.filter(function (l) { return l.fournisseur; });
   var main = lines.filter(function (l) { return l.main; })[0] || lines[0];
@@ -748,9 +759,8 @@ SCREENS.commandes = function (p) {
     var f = M.four[cur];
     if (patron && tot > 0) html += '<div class="hint" style="margin-top:12px">Montant estimé : <b>' + fe(tot) + ' HT</b>' + (noPrice ? ' (+ ' + noPrice + ' produit' + (noPrice > 1 ? 's' : '') + ' sans prix)' : '') + '</div>';
     html += '<div class="sec-title"><span>Envoyer la commande' + (f ? ' à ' + esc(f.nom) : '') + '</span></div>';
-    html += '<div class="contact-actions"><button data-a="cmdSend" data-how="mail" class="' + (f && f.email ? '' : '') + '">' + ic('mail') + 'Mail</button>' +
-      '<button data-a="cmdSend" data-how="wa">' + ic('chat') + 'WhatsApp</button><button data-a="cmdSend" data-how="copy">' + ic('copy') + 'Copier</button></div>';
-    if (f && !f.email && !f.tel) html += '<p style="font-size:13px;color:var(--muted);margin:0">Ajoute le mail ou le téléphone de ' + esc(f.nom) + ' dans Réglages › Fournisseurs pour l\'envoyer directement.</p>';
+    html += '<button class="btn" data-a="cmdSend">' + ic('mail') + 'Voir et envoyer le message</button>';
+    if (f && !f.email && !f.tel) html += '<p style="font-size:13px;color:var(--muted);margin:8px 0 0">Ajoute le mail ou le téléphone de ' + esc(f.nom) + ' dans Réglages › Fournisseurs pour l\'envoyer directement.</p>';
     p._cur = cur; p._nb = nb;
   }
   html += '</div>' + nav('commandes') + '</div>';
@@ -777,12 +787,13 @@ function cmdText() {
   });
   return { n: lines.length, text: 'Bonjour' + (f && f.contact ? ' ' + f.contact : '') + ',\n\nVoici une commande pour ' + (M.reg.entreprise || 'EURL Da Costa') + ' :\n' + lines.join('\n') + '\n\nMerci,\n' + (u ? u.nom : '') + '\n' + (M.reg.entreprise || 'EURL Da Costa'), four: f };
 }
-A.cmdSend = function (d) {
+A.cmdSend = function () {
   var c = cmdText();
   if (!c.n) { toast('Coche au moins un produit'); return; }
-  if (d.how === 'mail') { location.href = 'mailto:' + encodeURIComponent(c.four && c.four.email || '') + '?subject=' + encodeURIComponent('Commande ' + (D().reg.entreprise || 'EURL Da Costa')) + '&body=' + encodeURIComponent(c.text); return; }
-  if (d.how === 'wa') { var tel = waNumber(c.four && c.four.tel); window.open('https://wa.me/' + tel + '?text=' + encodeURIComponent(c.text), '_blank'); return; }
-  copyText(c.text);
+  var f = c.four;
+  openMsg({ title: 'Commande' + (f ? ' ' + f.nom : ''), sub: c.n + ' produit' + (c.n > 1 ? 's' : '') + '. Vérifie le message, puis choisis comment l\'envoyer.',
+    text: c.text, tel: f && f.tel, email: f && f.email, subject: 'Commande ' + (D().reg.entreprise || 'EURL Da Costa'),
+    hint: f && !f.tel && !f.email ? 'Pas de téléphone ni de mail pour ce fournisseur : WhatsApp et SMS te demanderont le contact.' : '' });
 };
 function waNumber(t) { t = String(t || '').replace(/[^\d+]/g, ''); if (!t) return ''; if (t[0] === '+') return t.slice(1); if (t.indexOf('00') === 0) return t.slice(2); if (t[0] === '0') return '33' + t.slice(1); return t; }
 function copyText(t) {
@@ -791,6 +802,35 @@ function copyText(t) {
   else { fallbackCopy(t); ok(); }
 }
 function fallbackCopy(t) { var ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch (e) {} ta.remove(); }
+
+
+/* ================= aperçu d'un message avant envoi (commandes, invitations) ================= */
+var MSG = null;
+function openMsg(o) {
+  MSG = o;
+  var share = !!navigator.share;
+  var btn = function (how, icon, label, off) {
+    return '<button class="' + (off ? 'off' : '') + '" data-a="msgSend" data-how="' + how + '">' + ic(icon) + label + '</button>';
+  };
+  openSheet('<h3>' + esc(o.title) + '</h3>' + (o.sub ? '<p>' + esc(o.sub) + '</p>' : '') +
+    '<label class="flabel" for="msgText" style="display:block;margin-bottom:6px">Message <span class="help" style="font-weight:500;color:var(--muted)">(tu peux le modifier)</span></label>' +
+    '<textarea id="msgText" class="inp" rows="9" style="font-size:16px;line-height:1.35">' + esc(o.text) + '</textarea>' +
+    '<div class="contact-actions" style="grid-template-columns:repeat(' + (share ? 5 : 4) + ',1fr);margin-top:12px">' +
+    btn('wa', 'chat', 'WhatsApp') + btn('sms', 'phone', 'SMS') + btn('mail', 'mail', 'Mail') +
+    (share ? btn('share', 'share', 'Autre…') : '') + btn('copy', 'copy', 'Copier') + '</div>' +
+    (o.hint ? '<p style="font-size:13px;margin:0">' + esc(o.hint) + '</p>' : ''));
+}
+A.msgSend = function (d) {
+  var o = MSG; if (!o) return;
+  var el = document.getElementById('msgText'), t = el ? el.value : o.text;
+  if (d.how === 'copy') { copyText(t); return; }
+  if (d.how === 'share') { navigator.share({ text: t }).catch(function () {}); return; }
+  var url = '';
+  if (d.how === 'wa') url = 'https://wa.me/' + waNumber(o.tel) + '?text=' + encodeURIComponent(t);
+  if (d.how === 'sms') url = 'sms:' + String(o.tel || '').replace(/[^\d+]/g, '') + '?body=' + encodeURIComponent(t);
+  if (d.how === 'mail') url = 'mailto:' + encodeURIComponent(o.email || '') + '?subject=' + encodeURIComponent(o.subject || '') + '&body=' + encodeURIComponent(t);
+  if (d.how === 'wa') window.open(url, '_blank'); else location.href = url;
+};
 
 /* ================= historique ================= */
 SCREENS.histo = function (p) {
@@ -990,18 +1030,36 @@ SCREENS.equipe = function () {
   var M = D();
   return '<div class="screen">' + head({ title: 'Équipe' }) + '<div class="scroll nonav"><div class="list">' + M.users.map(function (u) {
     return '<button class="row" data-a="editUser" data-id="' + u.id + '" style="' + (u.actif === '0' ? 'opacity:.55' : '') + '"><span class="avatar" style="margin:0;background:' + (u.role === 'patron' ? 'var(--navy)' : 'var(--gold)') + ';color:' + (u.role === 'patron' ? '#fff' : 'var(--navy)') + ';display:flex;align-items:center;justify-content:center">' + initial(u.nom) + '</span>' +
-      '<div class="grow"><span class="t">' + esc(u.nom) + '</span><span class="s">' + (u.role === 'patron' ? 'Patron' : 'Salarié') + (u.actif === '0' ? ' · ne fait plus partie de l\'équipe' : u.pin ? '' : ' · code pas encore choisi') + '</span></div>' + ic('chev') + '</button>';
+      '<div class="grow"><span class="t">' + esc(u.nom + (u.nomFamille ? ' ' + u.nomFamille : '')) + '</span><span class="s">' + (u.role === 'patron' ? 'Patron' : 'Salarié') + (u.tel ? ' · ' + esc(u.tel) : '') + (u.actif === '0' ? ' · ne fait plus partie de l\'équipe' : u.pin ? '' : ' · code pas encore choisi') + '</span></div>' + ic('chev') + '</button>';
   }).join('') + '</div><p style="font-size:13px;color:var(--muted);margin:12px 2px">Chaque personne choisit son code à 4 chiffres la première fois qu\'elle ouvre l\'appli sur son téléphone.</p></div>' +
     '<div class="bottom-bar"><button class="btn" data-a="newUser">' + ic('plus') + 'Ajouter un salarié</button></div></div>';
 };
-A.newUser = function () { go('user', { f: { isNew: true, nom: '', role: 'salarie' } }); };
-A.editUser = function (d) { var u = D().user[d.id]; go('user', { f: { isNew: false, id: u.id, nom: u.nom, role: u.role || 'salarie' } }); };
+A.newUser = function () { go('user', { f: { isNew: true, nom: '', nomFamille: '', tel: '', role: 'salarie' } }); };
+function userForm(u) { return { isNew: false, id: u.id, nom: u.nom, nomFamille: u.nomFamille || '', tel: u.tel || '', role: u.role || 'salarie' }; }
+A.editUser = function (d) { go('user', { f: userForm(D().user[d.id]) }); };
+function appLink() { return location.origin + location.pathname.replace(/index\.html$/, ''); }
+function inviteText(u) {
+  var boss = me() ? me().nom : 'Jimmy';
+  return 'Salut ' + u.nom + ' ! C\'est ' + boss + ' 👋\n\n' +
+    'J\'ai mis en place une appli pour gérer le stock de l\'atelier. Installe-la sur ton téléphone avec ce lien :\n' + appLink() + '\n\n' +
+    '1. Ouvre le lien et appuie sur « Installer » (sur iPhone : bouton Partager puis « Sur l\'écran d\'accueil »).\n' +
+    '2. Choisis ton prénom et invente ton code à 4 chiffres.\n\n' +
+    'Ensuite c\'est simple : quand tu prends du matériel, tu fais SORTIE. Quand tu ranges une livraison, tu fais ENTRÉE.\n\nMerci !';
+}
+function openInvite(u) {
+  openMsg({ title: 'Inviter ' + u.nom, sub: 'Le message avec le lien de l\'appli. Modifie-le si tu veux, puis choisis comment l\'envoyer.',
+    text: inviteText(u), tel: u.tel, subject: 'Appli du stock', hint: u.tel ? '' : 'Ajoute son numéro pour que WhatsApp et SMS s\'ouvrent directement sur sa conversation.' });
+}
+A.invite = function () { var u = D().user[VIEW.p.f.id]; if (u) openInvite(u); };
 SCREENS.user = function (p) {
   var f = p.f, u = f.isNew ? null : D().user[f.id];
   return '<div class="screen">' + head({ title: f.isNew ? 'Nouveau salarié' : esc(f.nom || 'Personne') }) + '<div class="scroll nonav">' +
-    '<div class="field"><label for="unom">Prénom</label><input id="unom" class="inp" data-i="uf" data-k="nom" autocomplete="off" value="' + esc(f.nom) + '" placeholder="ex. Kévin"></div>' +
+    '<div class="field"><label for="unom">Prénom</label><input id="unom" class="inp" data-i="uf" data-k="nom" autocomplete="off" autocapitalize="words" value="' + esc(f.nom) + '" placeholder="ex. Mathieu"></div>' +
+    '<div class="field"><label for="unf">Nom <span class="help">(facultatif)</span></label><input id="unf" class="inp" data-i="uf" data-k="nomFamille" autocomplete="off" autocapitalize="words" value="' + esc(f.nomFamille) + '"></div>' +
+    '<div class="field"><label for="utel">Téléphone <span class="help">(pour lui envoyer l\'invitation)</span></label><input id="utel" class="inp" type="tel" inputmode="tel" data-i="uf" data-k="tel" autocomplete="off" value="' + esc(f.tel) + '" placeholder="ex. 06 12 34 56 78"></div>' +
     '<div class="field"><span class="flabel">Rôle</span><div class="chips wrap"><button class="chip ' + (f.role === 'salarie' ? 'on' : '') + '" data-a="ufRole" data-v="salarie">Salarié : entrées et sorties</button>' +
     '<button class="chip ' + (f.role === 'patron' ? 'on' : '') + '" data-a="ufRole" data-v="patron">Patron : tout l\'accès</button></div></div>' +
+    (u && u.id !== ME ? '<button class="btn" style="margin-bottom:14px" data-a="invite">' + ic('share') + 'Envoyer l\'invitation</button>' : '') +
     (u ? '<div class="card"><div class="kv"><span>Code</span><span>' + (u.pin ? 'choisi' : 'à choisir au prochain lancement') + '</span></div></div>' +
       (u.pin ? '<button class="btn light" style="margin-bottom:10px" data-a="userPin">Réinitialiser son code</button>' : '') +
       (u.id !== ME ? (u.actif === '0' ? '<button class="btn light" data-a="userActif" data-v="1">Remettre dans l\'équipe</button>' : '<button class="btn danger" data-a="userActif" data-v="0">' + ic('trash') + 'Retirer de l\'équipe</button>') : '') : '') +
@@ -1014,9 +1072,18 @@ A.saveUser = function () {
   var f = VIEW.p.f, nom = (f.nom || '').trim();
   if (!nom) { toast('Il manque le prénom'); return; }
   if (!f.isNew && f.role !== 'patron' && D().user[f.id].role === 'patron' && !patronsActifs(f.id)) { toast('Il faut garder au moins un patron'); return; }
-  if (f.isNew) commit(put('Utilisateurs', { id: uid('u'), nom: nom, role: f.role, pin: '', actif: '1', ordre: String(D().users.length + 1) }));
-  else commit(put('Utilisateurs', { id: f.id, nom: nom, role: f.role }));
-  toast(f.isNew ? 'Salarié ajouté' : 'Enregistré', f.isNew ? nom + ' choisira son code à la première connexion' : nom);
+  var extra = { nomFamille: (f.nomFamille || '').trim(), tel: (f.tel || '').trim() };
+  if (f.isNew) {
+    var nid = uid('u');
+    commit(put('Utilisateurs', Object.assign({ id: nid, nom: nom, role: f.role, pin: '', actif: '1', ordre: String(D().users.length + 1) }, extra)));
+    toast('Salarié ajouté', nom + ' choisira son code à la première connexion');
+    go('user', { f: userForm(D().user[nid]) }, { replace: true });
+    AFTER.push(function () { openInvite(D().user[nid]); });
+    render(false);
+    return;
+  }
+  commit(put('Utilisateurs', Object.assign({ id: f.id, nom: nom, role: f.role }, extra)));
+  toast('Enregistré', nom);
   back();
 };
 A.userPin = function () {
@@ -1136,7 +1203,7 @@ A.delFam = function (d) { var f = D().fam[d.id]; ask({ title: 'Supprimer « ' + 
 /* ================= démarrage ================= */
 (function start() {
   try { history.replaceState({ r: 'boot', p: {} }, ''); } catch (e) {}
-  if (LOADED) { VIEW = { r: me() ? 'home' : 'login', p: {} }; saveView(); }
+  if (LOADED) { VIEW = { r: me() ? 'home' : 'login', p: {} }; saveView(); migrateNames(); }
   render(true);
   startSync();
   if ('serviceWorker' in navigator && window.isSecureContext) {

@@ -1,7 +1,7 @@
 /* Stock Da Costa — données locales, synchronisation automatique, calculs */
 'use strict';
 
-var APP_VERSION = '1.2';
+var APP_VERSION = '1.3';
 var CFG = window.STOCK_CONFIG || {};
 var IS_TEST = CFG.test === true;                       // version de test de Kevin (config.js : test: true)
 var NS = IS_TEST ? 'stock-test:' : 'stock:';            // mémoire du téléphone séparée entre test et officielle
@@ -282,4 +282,6 @@ function fdate(iso) {
 }
 function fday(iso) { var d = parseIso(iso); if (!d) return ''; var z = function (x) { return (x < 10 ? '0' : '') + x; }; return z(d.getDate()) + '/' + z(d.getMonth() + 1) + '/' + d.getFullYear(); }
 function todayIsoDate() { return nowIso().slice(0, 10); }
+/** Format unique des noms de produits (saisie, voix, factures) : MAJUSCULES, espaces simples. */
+function upName(s) { return String(s || '').replace(/\s+/g, ' ').trim().toLocaleUpperCase('fr-FR'); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
