@@ -27,6 +27,7 @@ var IC = {
   history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 3"/>',
   star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
   chev: '<path d="M9 5l7 7-7 7"/>', folder: '<path d="M3 6h6l2 2h10v11H3z"/>', box: '<path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/>',
+  camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
   euro: '<path d="M18 6a7 7 0 1 0 0 12"/><path d="M4 10h10M4 14h10"/>', install: '<path d="M12 3v12M7 10l5 5 5-5"/><rect x="4" y="18" width="16" height="3" rx="1"/>'
 };
 function ic(n, cls) { return '<svg class="i ' + (cls || '') + '" viewBox="0 0 24 24" aria-hidden="true">' + (IC[n] || '') + '</svg>'; }
@@ -69,8 +70,10 @@ function render(top) {
   var y = window.scrollY;
   var fn = SCREENS[VIEW.r] || SCREENS.home;
   if (VIEW.r !== 'boot' && VIEW.r !== 'login' && !me()) { VIEW = { r: 'login', p: {} }; fn = SCREENS.login; saveView(); }
+  document.body.classList.toggle('has-bar', false);
   root.innerHTML = (IS_TEST ? '<div class="testtag" aria-hidden="true">TEST</div>' : '') + fn(VIEW.p);
   PENDING_RENDER = false;
+  document.body.classList.toggle('has-bar', !!root.querySelector('.bottom-bar'));
   window.scrollTo(0, top ? 0 : y);
   if (AFTER.length) { var a = AFTER; AFTER = []; a.forEach(function (f) { try { f(); } catch (e) {} }); }
 }
@@ -337,7 +340,7 @@ A.pinKey = function (d) {
   }
   render(false);
 };
-function loginAs(id) { ME = id; LS.set('user', id); migrateNames(); go('home', {}, { replace: true }); }
+function loginAs(id) { ME = id; LS.set('user', id); migrateNames(); go('home', {}, { replace: true }); if (window.afterLogin) window.afterLogin(); }
 
 /* ================= accueil ================= */
 SCREENS.home = function () {
@@ -428,7 +431,8 @@ SCREENS.pick = function (p) {
     right: p.done ? '<button class="small-btn" data-a="pickDone" style="background:#fff;border:0;color:' + (S ? 'var(--red)' : 'var(--green)') + ';height:44px;font-size:16px">Terminé</button>' : '',
     extra: '<div class="seg"><button class="' + (S ? 'on' : '') + '" data-a="pickMode" data-m="S">− Sortie</button><button class="' + (S ? '' : 'on') + '" data-a="pickMode" data-m="E">+ Entrée</button></div>' +
       searchBox('q', 'Chercher un produit…', p.q) }) + syncBar() +
-    '<div class="scroll">' + (p.done ? '<div class="done-banner">' + ic('check') + '<span>' + esc(p.done) + '<br><span style="font-weight:500">Un autre produit ? Sinon appuie sur Terminé.</span></span></div>' : '') +
+    '<div class="scroll">' + (!S && isPatron() && !p.done ? '<button class="row" style="border:2px solid var(--green);margin-bottom:12px" data-a="go" data-r="facture"><span class="mv in" style="width:44px;height:44px">' + ic('camera') + '</span><div class="grow"><span class="t">Ranger une facture</span><span class="s">Photo ou PDF : l\'appli lit les lignes pour toi</span></div>' + ic('chev') + '</button>' : '') +
+    (p.done ? '<div class="done-banner">' + ic('check') + '<span>' + esc(p.done) + '<br><span style="font-weight:500">Un autre produit ? Sinon appuie sur Terminé.</span></span></div>' : '') +
     (mine.length && !p.q && !p.f ? '<div id="recents"><div class="sec-title" style="margin-top:0"><span>Mes derniers produits</span></div><div class="list">' + mine.map(function (x) { return prodRow(x, 'pickProd'); }).join('') + '</div><div class="sec-title"><span>Tous les produits</span></div></div>' : '') +
     famChips(p.f, 'filt') + '<div class="list" id="plist">' + prodList(list, 'pickProd') + '</div></div></div>';
 };

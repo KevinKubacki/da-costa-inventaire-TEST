@@ -1,11 +1,11 @@
 /* Stock Da Costa — données locales, synchronisation automatique, calculs */
 'use strict';
 
-var APP_VERSION = '1.3';
+var APP_VERSION = '1.4';
 var CFG = window.STOCK_CONFIG || {};
 var IS_TEST = CFG.test === true;                       // version de test de Kevin (config.js : test: true)
 var NS = IS_TEST ? 'stock-test:' : 'stock:';            // mémoire du téléphone séparée entre test et officielle
-var TABLES = ['Reglages', 'Utilisateurs', 'Fournisseurs', 'Familles', 'Produits', 'Prix', 'Mouvements', 'Inventaires', 'Comptages'];
+var TABLES = ['Reglages', 'Utilisateurs', 'Fournisseurs', 'Familles', 'Produits', 'Prix', 'Mouvements', 'Inventaires', 'Comptages', 'Factures', 'Alias'];
 
 var LS = {
   get: function (k, d) { try { var v = localStorage.getItem(NS + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -74,9 +74,9 @@ var RETRY = [2000, 5000, 10000, 30000, 30000];
 
 function configOk() { return CFG.apiUrl && /^(https:\/\/|http:\/\/(localhost|127\.0\.0\.1)[:/])/.test(CFG.apiUrl) && CFG.code && CFG.code !== 'A_CHANGER'; }
 
-function call(fn, args) {
+function call(fn, args, ms) {
   var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  var to = setTimeout(function () { if (ctrl) ctrl.abort(); }, 25000);
+  var to = setTimeout(function () { if (ctrl) ctrl.abort(); }, ms || 25000);
   return fetch(CFG.apiUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({ fn: fn, args: args }), signal: ctrl ? ctrl.signal : undefined, redirect: 'follow' })
     .then(function (r) { if (!r.ok) throw new Error('Réponse ' + r.status + ' du serveur'); return r.json(); })
@@ -222,6 +222,9 @@ function D() {
   M.moves.forEach(function (m) {
     if (m.type === 'sortie' && m.lieu && !seen[norm(m.lieu)] && M.chantiers.length < 8) { seen[norm(m.lieu)] = 1; M.chantiers.push(m.lieu); }
   });
+
+  M.alias = {}; vals('Alias').forEach(function (a) { M.alias[a.fournisseur + '|' + a.libelle] = a; });
+  M.factures = vals('Factures').sort(function (a, b) { return (a.rangee || '') < (b.rangee || '') ? 1 : -1; });
 
   M.invEnCours = vals('Inventaires').filter(function (i) { return i.statut === 'en_cours'; }).sort(function (a, b) { return a.date < b.date ? 1 : -1; })[0] || null;
   M.invFinis = vals('Inventaires').filter(function (i) { return i.statut === 'termine'; }).sort(function (a, b) { return a.date < b.date ? 1 : -1; });

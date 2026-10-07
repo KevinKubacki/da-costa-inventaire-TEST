@@ -1,12 +1,12 @@
 // Service worker : l'appli s'ouvre même sans réseau, et se met à jour toute seule.
 // ⚠ Changer VERSION à chaque livraison (sinon les téléphones gardent l'ancienne version).
-const VERSION = '1.3-2026-10-07';
+const VERSION = '1.4-2026-10-07';
 // Nom du cache propre à CE dossier (officielle /stock/ et test /stock-test/ peuvent être sur le même compte GitHub)
 const SCOPE = new URL(self.registration.scope).pathname;
 const PREFIX = 'stock-dacosta:' + SCOPE + ':';
 const CACHE = PREFIX + VERSION;
 const ASSETS = [
-  './', 'index.html', 'style.css', 'config.js', 'core.js', 'pdf.js', 'app.js', 'manifest.webmanifest', 'manifest-test.webmanifest',
+  './', 'index.html', 'style.css', 'config.js', 'core.js', 'pdf.js', 'app.js', 'facture.js', 'manifest.webmanifest', 'manifest-test.webmanifest',
   'lib/jspdf.umd.min.js', 'lib/jspdf.plugin.autotable.min.js',
   'fonts/barlow-latin-400-normal.woff2', 'fonts/barlow-latin-500-normal.woff2', 'fonts/barlow-latin-600-normal.woff2', 'fonts/barlow-latin-700-normal.woff2',
   'fonts/barlow-semi-condensed-latin-600-normal.woff2', 'fonts/barlow-semi-condensed-latin-700-normal.woff2', 'fonts/barlow-semi-condensed-latin-800-normal.woff2',
@@ -26,6 +26,22 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const req = e.request;
+  // Facture partagée depuis une autre appli (Gmail…, Android) : on la garde puis on ouvre l'écran Facture.
+  if (req.method === 'POST' && new URL(req.url).searchParams.has('share-target')) {
+    e.respondWith((async () => {
+      try {
+        const fd = await req.formData();
+        const c = await caches.open('stock-share:' + SCOPE);
+        (await c.keys()).forEach((k) => c.delete(k));
+        let i = 0;
+        for (const f of fd.getAll('file')) {
+          if (f && f.size) await c.put(SCOPE + 'share/' + (i++), new Response(f, { headers: { 'content-type': f.type || 'application/octet-stream' } }));
+        }
+      } catch (err) {}
+      return Response.redirect(SCOPE + '?partage=1', 303);
+    })());
+    return;
+  }
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;           // Google Apps Script : toujours par le réseau
