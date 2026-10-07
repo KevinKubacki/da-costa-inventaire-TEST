@@ -378,6 +378,8 @@ A.vxToggle = function () {
   call('voix', [CFG.code, { audio: r.data, mime: 'audio/wav', mode: VX.mode, ctx: voixCtx() }], 120000).then(function (doc) {
     VX.said = doc.transcription || '';
     var lignes = doc.lignes || [];
+    if (!lignes.length) { lignes = doc.lignes = derniersParLaVoix(VX.said); if (lignes.length) doc.reponse = 'Je supprime ' + (lignes.length > 1 ? 'les ' + lignes.length + ' derniers mouvements' : 'le dernier mouvement') + '. Vérifie, puis valide.'; }
+    if (lignes.length) doc.comprehensible = true;
     if (!doc.comprehensible || !lignes.length) {
       VX.st = 'err'; VX.err = 'Je n\'ai pas compris de produit. Réessaie en disant la quantité et le produit.';
       render(false); speak(PHRASE_REPETE, { fixe: true });
@@ -428,6 +430,16 @@ function buildVox(doc) {
     transcription: String(doc.transcription || ''), reponse: String(doc.reponse || ''), confirmation: String(doc.confirmation || 'C\'est noté !'), lignes: lignes };
 }
 /* --- revenir sur un mouvement déjà enregistré (supprimer / refaire) --- */
+var NOMBRES = { un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10 };
+/** Si Gemini n'a rien rendu mais que la phrase dit « supprime / annule les N derniers (mouvements) », l'appli le fait elle-même. */
+function derniersParLaVoix(t) {
+  var n = norm(t || '');
+  if (!/(supprim|annul|efface|enleve|retire)/.test(n) || !/dernier/.test(n)) return [];
+  var m = /(\d+|un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix)\s+dernier/.exec(n);
+  var k = m ? (NOMBRES[m[1]] || parseInt(m[1], 10) || 1) : 1;
+  return D().moves.filter(function (x) { return x.type !== 'depart'; }).slice(0, Math.min(k, 10))
+    .map(function (x) { return { action: 'supprimer', mouvement_id: x.id, quantite: Math.abs(num(x.delta)), dit: 'les ' + k + ' derniers mouvements', produit_id: x.produit, confiance: 1, autres_ids: [] }; });
+}
 function mvById(id) { return D().moves.filter(function (m) { return m.id === id; })[0] || null; }
 function mvAllowed(L, m) {
   if (!m || m.type === 'depart') return false;
