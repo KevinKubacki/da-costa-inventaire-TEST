@@ -51,7 +51,6 @@ document.addEventListener('change', function (e) {
 /* ---------------- écran Facture ---------------- */
 
 SCREENS.facture = function () {
-  if (!isPatron()) return SCREENS.home();
   var M = D(), html = '<div class="screen">' + head({ cls: 'green', title: 'Entrée par facture', sub: 'L\'appli lit la facture, tu vérifies, c\'est rangé.' }) + '<div class="scroll nonav">';
   var inputs = '<input type="file" accept="image/*" capture="environment" data-files id="inPhoto" class="hidden">' +
     '<input type="file" accept="image/*,application/pdf" multiple data-files id="inFile" class="hidden">';
@@ -81,14 +80,9 @@ SCREENS.facture = function () {
       '<button class="btn green" style="margin-top:16px;height:62px;font-size:22px" data-a="fRead">Lire la facture</button>' +
       '<button class="btn light" style="margin-top:10px" data-a="fClear">Recommencer</button>';
   }
-  var recent = M.factures.slice(0, 5);
+  var recent = isPatron() ? M.factures.slice(0, 4) : [];
   if (recent.length) {
-    html += '<div class="sec-title"><span>Dernières factures</span></div><div class="card" style="padding-top:4px;padding-bottom:4px">' + recent.map(function (f) {
-      var first = (f.fichiers || '').split(' ')[0];
-      return '<a class="line" style="text-decoration:none;color:inherit" ' + (first ? 'href="' + esc(first) + '" target="_blank" rel="noopener"' : '') + '><div class="grow"><span class="t">' + esc((fourName(f.fournisseur) || '?') + (f.numero ? ' · n° ' + f.numero : '')) +
-        '</span><span class="s">' + esc([fday(f.date), f.lignes + ' ligne' + (num(f.lignes) > 1 ? 's' : ''), f.total ? fe(num(f.total)) + ' HT' : ''].filter(Boolean).join(' · ')) + '</span></div>' +
-        (first ? '<span class="badge navy">voir</span>' : '<span class="badge ok">rangée</span>') + '</a>';
-    }).join('') + '</div>';
+    html += '<div class="sec-title"><span>Dernières factures</span><button class="link" data-a="go" data-r="factures">Toutes les factures</button></div><div class="card" style="padding-top:4px;padding-bottom:4px">' + recent.map(factRow).join('') + '</div>';
   }
   return html + inputs + '</div></div>';
 };
@@ -104,8 +98,13 @@ A.fRead = function () {
       clearInterval(FACT.timer); FACT.busy = false;
       if (!doc.est_document_achat && !(doc.lignes || []).length) { FACT.err = 'Ce document ne ressemble pas à une facture de matériel.'; render(false); return; }
       VERIF = buildVerif(doc); saveVerif();
-      FACT.pages = [];
+      var pages = FACT.pages; FACT.pages = [];
       go('verif', {}, { replace: true });
+      // logo du fournisseur : découpé dans la facture (si Gemini l'a trouvé), proposé pour sa fiche
+      cropLogo(pages, doc).then(function (logo) {
+        if (!logo || !VERIF) return;
+        VERIF.logo = logo; saveVerif(); if (VIEW.r === 'verif') render(false);
+      }).catch(function () {});
     })
     .catch(function (e) {
       clearInterval(FACT.timer); FACT.busy = false;
@@ -113,6 +112,72 @@ A.fRead = function () {
       render(false);
     });
 };
+
+/* ---------------- logo du fournisseur ---------------- */
+
+function loadImg(src) { return new Promise(function (res, rej) { var i = new Image(); i.onload = function () { res(i); }; i.onerror = rej; i.src = src; }); }
+function pdfBytes(b64) { var bin = atob(b64), u = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
+/** Image source (img ou canvas) de la page n° `page` (1 = première) de l'ensemble des fichiers envoyés. */
+function pageSource(pages, page) {
+  var i = 0, before = 0;
+  function next() {
+    if (i >= pages.length) return Promise.resolve(null);
+    var p = pages[i++];
+    if (!/pdf/i.test(p.mime)) {
+      if (before + 1 === page) return loadImg(p.thumb || ('data:' + p.mime + ';base64,' + p.data));
+      before++; return next();
+    }
+    return loadPdfJs().then(function (lib) { return lib.getDocument({ data: pdfBytes(p.data) }).promise; }).then(function (pdf) {
+      if (page > before + pdf.numPages) { before += pdf.numPages; return next(); }
+      return pdf.getPage(page - before).then(function (pg) {
+        var v0 = pg.getViewport({ scale: 1 }), vp = pg.getViewport({ scale: 1800 / Math.max(v0.width, v0.height) });
+        var c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+        var cx = c.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, c.width, c.height);
+        return pg.render({ canvasContext: cx, viewport: vp }).promise.then(function () { return c; });
+      });
+    });
+  }
+  return next();
+}
+/** Découpe le logo (cadre donné par Gemini en millièmes) → petite image (moins de 40 000 caractères, rangée dans le Sheet). */
+function cropLogo(pages, doc) {
+  var b = doc.logo_box || [], page = num(doc.logo_page);
+  if (!page || b.length !== 4 || !pages.length) return Promise.resolve('');
+  var y0 = b[0] / 1000, x0 = b[1] / 1000, y1 = b[2] / 1000, x1 = b[3] / 1000;
+  if (!(y1 > y0 && x1 > x0) || (y1 - y0) * (x1 - x0) > 0.3 || (y1 - y0) < 0.01 || (x1 - x0) < 0.02) return Promise.resolve('');
+  return pageSource(pages, page).then(function (src) {
+    if (!src) return '';
+    var W = src.naturalWidth || src.width, H = src.naturalHeight || src.height, m = 0.008;
+    var sx = Math.max(0, (x0 - m) * W), sy = Math.max(0, (y0 - m) * H), sw = Math.min(W, (x1 + m) * W) - sx, sh = Math.min(H, (y1 + m) * H) - sy;
+    if (sw < 8 || sh < 8) return '';
+    // on resserre le cadre sur le logo (marges blanches retirées)
+    var t = document.createElement('canvas'); t.width = Math.round(sw); t.height = Math.round(sh);
+    var tx = t.getContext('2d'); tx.fillStyle = '#fff'; tx.fillRect(0, 0, t.width, t.height); tx.drawImage(src, sx, sy, sw, sh, 0, 0, t.width, t.height);
+    try {
+      var px = tx.getImageData(0, 0, t.width, t.height).data, minX = t.width, minY = t.height, maxX = -1, maxY = -1;
+      for (var y = 0; y < t.height; y++) for (var x = 0; x < t.width; x++) {
+        var o = (y * t.width + x) * 4;
+        if (px[o] < 232 || px[o + 1] < 232 || px[o + 2] < 232) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+      }
+      if (maxX < 0) return '';
+      var pad = 4; minX = Math.max(0, minX - pad); minY = Math.max(0, minY - pad); maxX = Math.min(t.width - 1, maxX + pad); maxY = Math.min(t.height - 1, maxY + pad);
+      src = t; sx = minX; sy = minY; sw = maxX - minX + 1; sh = maxY - minY + 1;
+    } catch (e) { src = t; sx = 0; sy = 0; }
+    var out = '', maxW = 480, maxH = 200;
+    for (var tries = 0; tries < 4; tries++) {
+      var k = Math.min(1, maxW / sw, maxH / sh), c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(sw * k)); c.height = Math.max(1, Math.round(sh * k));
+      var cx = c.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, c.width, c.height);
+      cx.drawImage(src, sx, sy, sw, sh, 0, 0, c.width, c.height);
+      out = c.toDataURL('image/png');
+      if (out.length > 38000) out = c.toDataURL('image/jpeg', 0.88);
+      if (out.length <= 38000) return out;
+      maxW = Math.round(maxW * 0.75); maxH = Math.round(maxH * 0.75);
+    }
+    return '';
+  });
+}
+A.vNoLogo = function () { if (VERIF) { VERIF.logo = ''; saveVerif(); render(false); } };
 
 /* ---------------- préparation de la vérification ---------------- */
 
@@ -157,7 +222,7 @@ function buildVerif(doc) {
 function vLine(k) { return VERIF.lignes.filter(function (l) { return l.k === k; })[0]; }
 function vPending() { return VERIF.lignes.filter(function (l) { return l.statut === 'check' || l.statut === 'new'; }).length + (VERIF.four ? 0 : 1); }
 SCREENS.verif = function () {
-  if (!VERIF || !isPatron()) { return SCREENS.facture(); }
+  if (!VERIF) { return SCREENS.facture(); }
   var M = D(), V = VERIF;
   var nOk = V.lignes.filter(function (l) { return l.statut === 'ok' || l.statut === 'create'; }).length;
   var nCheck = V.lignes.filter(function (l) { return l.statut === 'check'; }).length, nNew = V.lignes.filter(function (l) { return l.statut === 'new'; }).length;
@@ -167,6 +232,9 @@ SCREENS.verif = function () {
     extra: '<div class="vchips"><span class="vc ok">' + nOk + ' reconnue' + (nOk > 1 ? 's' : '') + '</span>' + (nCheck ? '<span class="vc check">' + nCheck + ' à vérifier</span>' : '') + (nNew ? '<span class="vc new">' + nNew + ' nouveau' + (nNew > 1 ? 'x' : '') + '</span>' : '') + '</div>' }) +
     '<div class="scroll nonav" style="padding-bottom:170px">';
   if (dup) html += '<div class="hint" style="background:var(--orange-bg);color:#7A3D00"><b>Déjà rangée ?</b> Une facture ' + esc(fourName(V.four)) + ' n° ' + esc(V.numero) + ' a été rangée le ' + fday(dup.rangee) + '. Vérifie avant de valider pour ne pas compter deux fois.</div>';
+  if (V.logo && !(V.four && M.four[V.four] && M.four[V.four].logo)) {
+    html += '<div class="vlogo"><img src="' + V.logo + '" alt="Logo du fournisseur"><div class="grow"><b>Logo trouvé</b><span>Il ira sur la fiche du fournisseur (même si tu abandonnes).</span></div><button class="link" data-a="vNoLogo">Ne pas le garder</button></div>';
+  }
   if (!V.four) {
     html += '<div class="vcard check"><div class="vhead"><span class="dot check"></span><span>Fournisseur lu : <b>' + esc(V.fourNom || '?') + '</b></span></div>' +
       '<span class="vq check">Il n\'est pas dans ta liste de fournisseurs.</span>' +
@@ -270,7 +338,10 @@ function rematchAlias() {
 }
 A.vCancel = function () {
   ask({ title: 'Abandonner cette facture ?', text: 'Rien ne sera ajouté au stock. Le fichier reste rangé dans Google Drive.', ok: 'Abandonner', danger: true }).then(function (ok) {
-    if (!ok) return; VERIF = null; saveVerif(); go('facture', {}, { replace: true });
+    if (!ok) return;
+    // le logo trouvé reste utile même si la facture n'est pas rangée
+    var M = D(); if (VERIF.logo && VERIF.four && M.four[VERIF.four] && !M.four[VERIF.four].logo) commit(put('Fournisseurs', { id: VERIF.four, logo: VERIF.logo }));
+    VERIF = null; saveVerif(); go('facture', {}, { replace: true });
   });
 };
 function hashKey(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
@@ -292,6 +363,7 @@ A.vValidate = function () {
     ops.push(put('Alias', { id: 'a' + hashKey(key), fournisseur: four, libelle: key.split('|')[1], produit: pid, facteur: String(l.facteur), maj: now }));
     n++;
   });
+  if (V.logo && four && !(M.four[four] && M.four[four].logo)) ops.push(put('Fournisseurs', { id: four, logo: V.logo }));
   ops.push(put('Factures', { id: fid, date: V.date, fournisseur: four, numero: V.numero, total: V.total === null ? '' : String(V.total), lignes: String(n), fichiers: (V.fichiers || []).join(' '), qui: ME, rangee: now }));
   commit(ops);
   VERIF = null; saveVerif();
@@ -327,11 +399,171 @@ function sharedFiles() {
         keys.forEach(function (k) { c.delete(k); });
         var files = blobs.map(function (b, i) { try { return new File([b], b.type === 'application/pdf' ? 'Facture.pdf' : 'Photo' + i + '.jpg', { type: b.type }); } catch (e) { b.name = 'Fichier'; return b; } });
         if (!files.length) return;
-        if (isPatron()) addFiles(files);
-        else { window.PENDING_SHARE = files; toast('Facture reçue', 'Connecte-toi en patron pour la ranger'); }
+        if (me()) addFiles(files);
+        else { window.PENDING_SHARE = files; toast('Facture reçue', 'Connecte-toi pour la ranger'); }
       });
     });
   }).catch(function () {});
 }
-window.afterLogin = function () { if (window.PENDING_SHARE && isPatron()) { var f = window.PENDING_SHARE; window.PENDING_SHARE = null; addFiles(f); } };
+window.afterLogin = function () { if (window.PENDING_SHARE) { var f = window.PENDING_SHARE; window.PENDING_SHARE = null; addFiles(f); } };
 sharedFiles();
+
+
+/* ---------------- toutes les factures (patron) ---------------- */
+
+function factLignes(fid) { return D().moves.filter(function (m) { return m.note === fid && m.type === 'entree'; }); }
+function factDate(f) { return String(f.date || f.rangee || '').slice(0, 10); }
+function factRow(f) {
+  var nb = num(f.lignes), photo = f.fichiers && !/\.pdf/i.test(f.fichiers) && f.fichiers.indexOf(' ') > 0;
+  return '<button class="line frow" data-a="go" data-r="factureFiche" data-id="' + f.id + '">' +
+    '<span class="fthumb"><i></i><i></i><i></i><i></i></span>' +
+    '<div class="grow"><span class="t ell">' + esc((fourName(f.fournisseur) || 'Fournisseur ?') + (f.numero ? ' · n° ' + f.numero : '')) + '</span>' +
+    '<span class="s">' + esc([fday(factDate(f)), nb + ' ligne' + (nb > 1 ? 's' : ''), userName(f.qui)].filter(Boolean).join(' · ')) + '</span></div>' +
+    (f.total ? '<b class="ftot">' + fe(num(f.total)) + '</b>' : '') + '</button>';
+}
+var MOIS_NOMS = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+SCREENS.factures = function (p) {
+  if (!isPatron()) return SCREENS.facture();
+  var M = D(), nq = norm(p.q || '');
+  var list = M.factures.filter(function (f) {
+    if (!nq) return true;
+    var txt = (fourName(f.fournisseur) || '') + ' ' + (f.numero || '') + ' ' + factLignes(f.id).map(function (m) { var pr = M.prod[m.produit]; return pr ? pr.nom : ''; }).join(' ');
+    return norm(txt).indexOf(nq) >= 0;
+  }).sort(function (a, b) { return factDate(a) < factDate(b) ? 1 : factDate(a) > factDate(b) ? -1 : ((a.rangee || '') < (b.rangee || '') ? 1 : -1); });
+  var groups = [], cur = null;
+  list.forEach(function (f) {
+    var k = factDate(f).slice(0, 7);
+    if (!cur || cur.k !== k) { cur = { k: k, items: [], tot: 0 }; groups.push(cur); }
+    cur.items.push(f); cur.tot += num(f.total) || 0;
+  });
+  var html = '<div class="screen">' + head({ title: 'Factures', right: '<button class="small-btn" style="background:var(--green);color:#fff;border:0" data-a="go" data-r="facture">' + ic('plus') + 'Ranger</button>',
+    extra: searchBox('fsq', 'Fournisseur, n° de facture, produit…', p.q) }) + syncBar() + '<div class="scroll">';
+  if (!list.length) html += '<div class="empty">' + (nq ? 'Aucune facture trouvée' : 'Aucune facture rangée pour l\'instant.<br>Appuie sur « Ranger » pour lire la première.') + '</div>';
+  groups.forEach(function (g) {
+    var y = +g.k.slice(0, 4), m = +g.k.slice(5, 7);
+    html += '<div class="sec-title"><span>' + (m ? MOIS_NOMS[m - 1] + ' ' + y : 'Sans date') + '</span><span class="s" style="color:var(--muted);font-size:14px;font-weight:600">' + (g.tot ? fe(g.tot) + ' HT' : '') + '</span></div>' +
+      '<div class="card" style="padding-top:2px;padding-bottom:2px">' + g.items.map(factRow).join('') + '</div>';
+  });
+  html += '<p style="text-align:center;color:var(--muted);font-size:13px;margin-top:16px">Montants HT · originaux gardés sur Google Drive</p>';
+  return html + '</div>' + nav('inventaire') + '</div>';
+};
+var FSQ_T = null;
+I.fsq = function (v) { VIEW.p.q = v; saveView(); clearTimeout(FSQ_T); FSQ_T = setTimeout(function () { render(false); var inp = document.querySelector('[data-i="fsq"]'); if (inp) { inp.focus(); inp.setSelectionRange(v.length, v.length); } }, 250); };
+
+SCREENS.factureFiche = function (p) {
+  var M = D(), f = (M.factures.filter(function (x) { return x.id === p.id; }))[0];
+  if (!f || !isPatron()) return SCREENS.factures(VIEW.p = { q: '' });
+  var lignes = factLignes(f.id), liens = (f.fichiers || '').split(' ').filter(Boolean);
+  var html = '<div class="screen">' + head({ title: esc(fourName(f.fournisseur) || 'Facture'), sub: esc('Facture' + (f.numero ? ' n° ' + f.numero : '') + (factDate(f) ? ' · ' + fday(factDate(f)) : '')) }) + '<div class="scroll nonav">';
+  html += '<div class="card ftop"><div class="grow"><span class="s">Rangée' + (f.qui ? ' par ' + esc(userName(f.qui)) : '') + (f.rangee ? ' le ' + fday(f.rangee) : '') + '</span>' +
+    '<span class="s">' + lignes.length + ' ligne' + (lignes.length > 1 ? 's' : '') + ' entrée' + (lignes.length > 1 ? 's' : '') + ' en stock</span></div>' +
+    (f.total ? '<div class="ftotal">' + fe(num(f.total)) + '<small>HT</small></div>' : '') + '</div>';
+  if (liens.length) {
+    html += '<div class="card forig"><button class="fthumb big" data-a="fView" data-id="' + f.id + '" aria-label="Voir l\'original"><i></i><i></i><i></i><i></i><i></i><i></i></button>' +
+      '<div class="grow"><span class="s">Original : ' + liens.length + ' fichier' + (liens.length > 1 ? 's' : '') + ' sur Google Drive</span>' +
+      '<button class="btn" style="margin-top:8px" data-a="fView" data-id="' + f.id + '">' + ic('eye') + 'Voir l\'original</button>' +
+      '<button class="btn light" style="margin-top:8px" data-a="fShare" data-id="' + f.id + '">' + ic('share') + 'Partager</button></div></div>';
+  } else {
+    html += '<div class="hint">Pas d\'original enregistré pour cette facture.</div>';
+  }
+  html += '<div class="sec-title"><span>Entré en stock</span></div><div class="card" style="padding-top:2px;padding-bottom:2px">' +
+    (lignes.length ? lignes.map(function (m) {
+      var pr = M.prod[m.produit];
+      return '<button class="line" data-a="openProd" data-id="' + m.produit + '"><span class="mv in" style="min-width:48px">+' + fq(num(m.delta)) + '</span>' +
+        '<div class="grow"><span class="t ell">' + esc(pr ? pr.nom : 'Produit supprimé') + '</span></div>' +
+        (m.prix ? '<span class="s" style="white-space:nowrap">' + fe(num(m.prix)) + '/u</span>' : '') + '</button>';
+    }).join('') : '<div class="empty">Plus aucune ligne en stock pour cette facture.</div>') + '</div>';
+  html += '<button class="btn danger" style="margin-top:18px" data-a="fCancel" data-id="' + f.id + '">' + ic('trash') + 'Annuler cette facture</button>' +
+    '<p style="font-size:13px;color:var(--muted);margin:8px 4px 0">Annuler retire du stock les ' + lignes.length + ' entrée' + (lignes.length > 1 ? 's' : '') + ' de cette facture et met l\'original à la corbeille du Drive. Les produits créés, les prix et ce que l\'appli a appris restent.</p>';
+  return html + '</div></div>';
+};
+A.fCancel = function (d) {
+  var M = D(), f = (M.factures.filter(function (x) { return x.id === d.id; }))[0]; if (!f) return;
+  var lignes = factLignes(f.id), liens = (f.fichiers || '').split(' ').filter(Boolean);
+  ask({ title: 'Annuler cette facture ?', text: lignes.length + ' entrée' + (lignes.length > 1 ? 's' : '') + ' en stock seront retirée' + (lignes.length > 1 ? 's' : '') + '. Tu pourras la ranger à nouveau ensuite.', ok: 'Annuler la facture', danger: true }).then(function (ok) {
+    if (!ok) return;
+    var ops = lignes.map(function (m) { return del('Mouvements', m.id); }); ops.push(del('Factures', f.id));
+    commit(ops);
+    if (liens.length) call('jeterFichiers', [CFG.code, { liens: liens }], 60000).catch(function () { /* le fichier restera dans le Drive */ });
+    toast('Facture annulée', lignes.length + ' entrée' + (lignes.length > 1 ? 's' : '') + ' retirée' + (lignes.length > 1 ? 's' : '') + ' du stock');
+    go('factures', {}, { replace: true });
+  });
+};
+
+/* ---------------- original : affiché dans l'appli, sans compte Google ---------------- */
+
+var FCACHE = {};   // lien → { nom, mime, data } (gardé le temps de la session)
+function getOriginal(lien) {
+  if (FCACHE[lien]) return Promise.resolve(FCACHE[lien]);
+  return call('fichier', [CFG.code, { lien: lien }], 90000).then(function (r) { FCACHE[lien] = r; return r; });
+}
+function b64Blob(r) { var bin = atob(r.data), u = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new Blob([u], { type: r.mime }); }
+function loadPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  return new Promise(function (res, rej) {
+    var sc = document.createElement('script'); sc.src = 'lib/pdfjs/pdf.min.js';
+    sc.onload = function () { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'lib/pdfjs/pdf.worker.min.js'; res(window.pdfjsLib); };
+    sc.onerror = function () { rej(new Error('Lecteur PDF indisponible hors connexion')); };
+    document.head.appendChild(sc);
+  });
+}
+function renderPdfInto(box, r) {
+  return loadPdfJs().then(function (lib) {
+    var bin = atob(r.data), u = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    return lib.getDocument({ data: u }).promise;
+  }).then(function (pdf) {
+    var chain = Promise.resolve(), w = Math.min(box.clientWidth || 360, 900), dpr = Math.min(window.devicePixelRatio || 1, 2) * 1.5;
+    for (var n = 1; n <= Math.min(pdf.numPages, 20); n++) (function (n) {
+      chain = chain.then(function () { return pdf.getPage(n); }).then(function (page) {
+        var v0 = page.getViewport({ scale: 1 }), sc = w / v0.width, vp = page.getViewport({ scale: sc * dpr });
+        var c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height); c.className = 'vpage';
+        box.appendChild(c);
+        return page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+      });
+    })(n);
+    return chain;
+  });
+}
+A.fView = function (d) {
+  var f = (D().factures.filter(function (x) { return x.id === d.id; }))[0]; if (!f) return;
+  var liens = (f.fichiers || '').split(' ').filter(Boolean); if (!liens.length) return;
+  var ov = document.createElement('div'); ov.className = 'viewer'; ov.id = 'viewer';
+  ov.innerHTML = '<div class="v-head"><div class="grow"><b>' + esc((fourName(f.fournisseur) || 'Facture') + (f.numero ? ' · n° ' + f.numero : '')) + '</b><span>Écarte deux doigts pour zoomer</span></div>' +
+    '<button class="v-x" data-a="fViewClose" aria-label="Fermer">' + ic('x') + '</button></div>' +
+    '<div class="v-body"><div class="v-load"><i class="spin"></i>Je récupère l\'original…</div></div>' +
+    '<div class="v-foot"><button class="btn light" data-a="fZoom">' + ic('search') + 'Zoom</button><button class="btn" data-a="fShare" data-id="' + f.id + '">' + ic('share') + 'Partager</button></div>';
+  document.body.appendChild(ov); document.body.classList.add('noscroll');
+  try { history.pushState({ r: VIEW.r, p: VIEW.p, viewer: 1 }, ''); } catch (e) {}
+  var body = ov.querySelector('.v-body');
+  Promise.all(liens.map(getOriginal)).then(function (rs) {
+    if (!document.getElementById('viewer')) return;
+    body.innerHTML = '';
+    var chain = Promise.resolve();
+    rs.forEach(function (r) {
+      chain = chain.then(function () {
+        if (/pdf/i.test(r.mime)) return renderPdfInto(body, r);
+        var img = document.createElement('img'); img.className = 'vpage'; img.alt = r.nom || 'Facture'; img.src = 'data:' + r.mime + ';base64,' + r.data; body.appendChild(img);
+      });
+    });
+    return chain;
+  }).catch(function (e) {
+    body.innerHTML = '<div class="v-load err">Impossible d\'afficher l\'original.<br><span>' + esc(e.message || String(e)) + '</span></div>';
+  });
+};
+function closeViewer() { var ov = document.getElementById('viewer'); if (ov) { ov.remove(); document.body.classList.remove('noscroll'); return true; } return false; }
+A.fViewClose = function () { if (history.state && history.state.viewer) history.back(); else closeViewer(); };
+// bouton retour d'Android : ferme l'original sans changer d'écran
+window.addEventListener('popstate', function (e) { if (closeViewer()) e.stopImmediatePropagation(); }, true);
+A.fZoom = function () { var b = document.querySelector('#viewer .v-body'); if (b) b.classList.toggle('zoom'); };
+A.fShare = function (d) {
+  var f = (D().factures.filter(function (x) { return x.id === d.id; }))[0]; if (!f) return;
+  var liens = (f.fichiers || '').split(' ').filter(Boolean); if (!liens.length) return;
+  toast('Préparation…', 'Je récupère l\'original');
+  Promise.all(liens.map(getOriginal)).then(function (rs) {
+    var files = rs.map(function (r) { return new File([b64Blob(r)], r.nom || 'Facture', { type: r.mime }); });
+    var titre = 'Facture ' + (fourName(f.fournisseur) || '') + (f.numero ? ' n° ' + f.numero : '');
+    if (navigator.canShare && navigator.canShare({ files: files })) return navigator.share({ files: files, title: titre, text: titre }).catch(function () {});
+    files.forEach(function (fl) { var a = document.createElement('a'); a.href = URL.createObjectURL(fl); a.download = fl.name; document.body.appendChild(a); a.click(); a.remove(); });
+    toast('Téléchargé', 'Le fichier est dans tes téléchargements');
+  }).catch(function (e) { toast('Partage impossible', e.message || String(e)); });
+};
