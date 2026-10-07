@@ -218,8 +218,12 @@ function bufferToWav(buf) {
  * Dit la phrase. Ordre : 1) déjà connue (instantané)  2) voix EN DIRECT (Live, sans limite)  3) ancienne voix (limitée)  4) texte seul.
  * Une nouvelle demande coupe la précédente.
  */
+/** Mots du métier que les voix prononcent mal : on écrit comme ça se dit (le texte affiché ne change pas). */
+var PRONONCE = [[/\bbast(?:a)?ings?\b/gi, function (m) { return /s$/i.test(m) ? 'bastins' : 'bastin'; }], [/\bØ\s?/g, 'diamètre ']];
+function prononce(t) { PRONONCE.forEach(function (r) { t = t.replace(r[0], r[1]); }); return t; }
 function speak(text, opt) {
   opt = opt || {};
+  if (text) text = prononce(text);
   stopSpeak();
   if (!text) return Promise.resolve(false);
   var tok = AUD.tok, t0 = Date.now(), voix = opt.voix || voiceName(), key = voix + '|' + text;
@@ -259,7 +263,7 @@ function setSpeakState(s) {
 function showTiming() {
   if (!IS_TEST) return;
   var el = document.getElementById('vxTiming'); if (!el || !VOX) return;
-  el.textContent = 'compris en ' + (VOX.ms / 1000).toFixed(1) + ' s' + (AUD.firstMs ? ' · voix (' + (AUD.via || '') + ') en ' + (AUD.firstMs / 1000).toFixed(1) + ' s' : '');
+  el.textContent = 'compris en ' + (VOX.ms / 1000).toFixed(1) + ' s' + (VOX.modele ? ' (' + VOX.modele.replace(/^gemini-/, '') + ')' : '') + (AUD.firstMs ? ' · voix (' + (AUD.via || '') + ') en ' + (AUD.firstMs / 1000).toFixed(1) + ' s' : '');
 }
 // la voix s'arrête dès qu'on change d'écran
 (function () {
@@ -388,7 +392,7 @@ A.vxToggle = function () {
       VOX.reponse = nv.reponse; VOX.confirmation = nv.confirmation || VOX.confirmation;
       VOX.transcription = (VOX.transcription ? VOX.transcription + ' ' : '') + nv.transcription;
     } else VOX = nv;
-    VOX.ms = Date.now() - t0;
+    VOX.ms = Date.now() - t0; VOX.modele = doc.modele || '';
     saveVox(); VX.st = 'idle'; VX.append = false;
     go('voixVerif', {}, { replace: true });
     speak(VOX.reponse);
@@ -463,7 +467,7 @@ SCREENS.voixVerif = function () {
   html += '<div class="say" id="vxSay" data-s=""><div class="say-top"><span class="wave">' + '<i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>' + '</span><span class="say-lab">à voix haute</span>' +
     '<button class="small-btn" data-a="voxReplay">' + ic('replay') + 'Réécouter</button></div>' +
     '<p class="say-txt">' + esc(V.reponse) + '</p>' + (V.transcription ? '<p class="say-you">Tu as dit : « ' + esc(V.transcription) + ' »</p>' : '') +
-    (IS_TEST ? '<p class="say-ms" id="vxTiming">' + (V.ms ? 'compris en ' + (V.ms / 1000).toFixed(1) + ' s' : '') + '</p>' : '') + '<p class="say-err">La voix n\'a pas pu être chargée (connexion ou quota Gemini) : tout est écrit ci-dessus.</p></div>';
+    (IS_TEST ? '<p class="say-ms" id="vxTiming">' + (V.ms ? 'compris en ' + (V.ms / 1000).toFixed(1) + ' s' + (V.modele ? ' (' + V.modele.replace(/^gemini-/, '') + ')' : '') : '') + '</p>' : '') + '<p class="say-err">La voix n\'a pas pu être chargée (connexion ou quota Gemini) : tout est écrit ci-dessus.</p></div>';
   if (hasIn && V.fourNom && !V.four) {
     html += '<div class="vcard check"><div class="vhead"><span class="dot check"></span><span>Fournisseur dit : <b>' + esc(V.fourNom) + '</b></span></div>' +
       '<span class="vq check">Il n\'est pas dans ta liste.</span><div class="btn-row"><button class="btn light" style="height:46px" data-a="voxFourNew">Ajouter</button><button class="btn light" style="height:46px" data-a="voxFourPick">Choisir</button></div>' +
