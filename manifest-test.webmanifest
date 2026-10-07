@@ -1,0 +1,18 @@
+{
+  "id": "./?test",
+  "name": "Stock Da Costa TEST",
+  "short_name": "Stock TEST",
+  "description": "VERSION TEST · gestion du stock de l'EURL Da Costa, couverture zinguerie",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#2E2C6E",
+  "theme_color": "#2E2C6E",
+  "icons": [
+    { "src": "icons/test-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/test-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/test-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

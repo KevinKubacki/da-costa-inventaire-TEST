@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Stock Da Costa</title>
+<meta name="description" content="Gestion du stock de l'EURL Da Costa, couverture zinguerie">
+<meta name="theme-color" content="#2E2C6E">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Stock">
+<link rel="preload" href="fonts/barlow-semi-condensed-latin-800-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+<script>
+  // Officielle ou test : nom, icônes et fiche d'installation différents (seul config.js change entre les deux).
+  (function () {
+    var t = window.STOCK_CONFIG && window.STOCK_CONFIG.test === true, p = t ? 'test-' : '';
+    document.write('<link rel="manifest" href="manifest' + (t ? '-test' : '') + '.webmanifest">' +
+      '<link rel="icon" type="image/png" href="icons/' + p + 'favicon.png">' +
+      '<link rel="apple-touch-icon" href="icons/' + p + 'apple-touch-icon.png">');
+    if (t) { document.title = 'Stock TEST'; document.querySelector('meta[name="apple-mobile-web-app-title"]').content = 'Stock TEST'; }
+  })();
+</script>
+</head>
+<body>
+<div id="app"><div class="loading"><img src="icons/logo-blanc.png" alt="EURL Da Costa"><div class="spin"></div></div></div>
+<script src="lib/jspdf.umd.min.js" defer></script>
+<script src="lib/jspdf.plugin.autotable.min.js" defer></script>
+<script src="core.js" defer></script>
+<script src="pdf.js" defer></script>
+<script src="app.js" defer></script>
+</body>
+</html>
