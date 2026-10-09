@@ -1,7 +1,7 @@
 /* Stock Da Costa — données locales, synchronisation automatique, calculs */
 'use strict';
 
-var APP_VERSION = '1.18';
+var APP_VERSION = '1.21';
 var CFG = window.STOCK_CONFIG || {};
 var IS_TEST = CFG.test === true;                       // version de test de Kevin (config.js : test: true)
 var NS = IS_TEST ? 'stock-test:' : 'stock:';            // mémoire du téléphone séparée entre test et officielle
@@ -72,6 +72,25 @@ var SYNC = { busy: false, since: 0, last: LS.get('lastSync', 0), err: '', errCod
   sheetUrl: LS.get('sheetUrl', ''), version: LS.get('scriptVersion', ''), ms: 0 };
 var RETRY = [2000, 5000, 10000, 30000, 30000];
 
+/* V1.19 : code d'accès PERSONNEL, gardé dans le téléphone (plus dans config.js, qui est public sur GitHub).
+   Il arrive par le lien d'invitation (…/#cle=…) ou, pour Kevin, en tapant le code administrateur une fois. */
+(function () {
+  var m = /[#&]cle=([0-9a-f]{64})/.exec(location.hash || '');
+  if (m) {
+    if (LS.get('cle', '') !== m[1]) LS.del('user');          // nouveau lien = nouvelle personne
+    LS.set('cle', m[1]);
+    try { history.replaceState(history.state, '', location.pathname + location.search); } catch (e) {}
+  }
+  var k = LS.get('cle', '');
+  if (!k && CFG.code && CFG.code !== 'A_CHANGER') { k = String(CFG.code); LS.set('cle', k); }   // anciens config.js : on garde le code dans le téléphone
+  CFG.code = k;
+  SYNC.moi = LS.get('moi', ''); SYNC.push = LS.get('push', null);
+})();
+/** Accès coupé par le patron (ou code changé) : on efface tout ce que ce téléphone savait. */
+function accesCoupe() {
+  try { Object.keys(localStorage).forEach(function (k) { if (k.indexOf(NS) === 0) localStorage.removeItem(k); }); } catch (e) {}
+  CFG.code = '';
+}
 function configOk() { return CFG.apiUrl && /^(https:\/\/|http:\/\/(localhost|127\.0\.0\.1)[:/])/.test(CFG.apiUrl) && CFG.code && CFG.code !== 'A_CHANGER'; }
 
 function call(fn, args, ms) {
@@ -95,7 +114,7 @@ function scheduleFlush(ms) {
 }
 
 function flush() {
-  if (!configOk()) { SYNC.err = 'Appli non configurée : remplir config.js (adresse du script et code).'; SYNC.errCode = 'CONFIG'; notifySync(); return Promise.resolve(); }
+  if (!configOk()) { SYNC.err = CFG.apiUrl ? 'Pas encore d\'accès sur ce téléphone.' : 'Appli non configurée : remplir config.js (adresse du script).'; SYNC.errCode = CFG.apiUrl ? 'NOKEY' : 'CONFIG'; notifySync(); if (CFG.apiUrl && window.onAccesCoupe) window.onAccesCoupe(); return Promise.resolve(); }
   if (SYNC.busy) {
     if (Date.now() - SYNC.since < 40000) return Promise.resolve();
     SYNC.busy = false;                    // sécurité : un envoi bloqué ne bloque plus tout
@@ -123,6 +142,8 @@ function flush() {
     if (changed) { DB = db; LAST_SIG = sig; DBV++; }
     SYNC.err = ''; SYNC.errCode = ''; SYNC.retry = 0; SYNC.last = Date.now();
     SYNC.sheetUrl = res.sheetUrl || SYNC.sheetUrl; SYNC.version = res.version || SYNC.version;
+    SYNC.moi = res.moi || ''; SYNC.admin = !!res.admin; LS.set('moi', SYNC.moi);
+    SYNC.push = res.push || null; LS.set('push', SYNC.push); if (window.pushVerifier) pushVerifier();
     LS.set('lastSync', SYNC.last); LS.set('sheetUrl', SYNC.sheetUrl); LS.set('scriptVersion', SYNC.version);
     LOADED = true; LS.set('loaded', true);
     saveLocal();
@@ -133,7 +154,7 @@ function flush() {
   }).catch(function (e) {
     SYNC.busy = false;
     SYNC.err = e.message; SYNC.errCode = e.code || ''; SYNC.errAt = Date.now();
-    if (e.code === 'CODE') SYNC.err = "Code d'accès refusé. L'appli envoie le code « " + CFG.code + " » : il doit être écrit exactement pareil dans CODE_ACCES du script, puis le script redéployé (Gérer les déploiements › Nouvelle version).";
+    if (e.code === 'CODE') { SYNC.err = "Ce téléphone n'a pas (ou plus) accès à l'appli."; var avait = !!CFG.code; accesCoupe(); if (avait) { setTimeout(function () { location.reload(); }, 30); } else if (window.onAccesCoupe) window.onAccesCoupe(); }
     var d = e.code === 'BUSY' ? 1500 : RETRY[Math.min(SYNC.retry, RETRY.length - 1)];
     SYNC.retry++;
     scheduleFlush(d);

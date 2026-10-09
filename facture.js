@@ -3,7 +3,24 @@
 
 var FACT = { pages: [], busy: false, err: '', step: 0, timer: null };   // fichiers en mémoire (pas dans l'historique)
 var VERIF = LS.get('verif', null);                                      // vérification en cours (survit à une fermeture)
-function saveVerif() { if (VERIF) LS.set('verif', VERIF); else LS.del('verif'); }
+var VQUEUE = LS.get('vqueue', []);                                       // V1.20 : les factures suivantes à vérifier
+function saveVerif() { if (VERIF) LS.set('verif', VERIF); else LS.del('verif'); if (VQUEUE.length) LS.set('vqueue', VQUEUE); else LS.del('vqueue'); }
+/** Chaque PDF = une facture ; toutes les photos ensemble = une facture (pages d'un même document). */
+function groupDocs(pages) {
+  var docs = [], photos = [];
+  pages.forEach(function (p) { if (/pdf/i.test(p.mime)) docs.push({ nom: p.name || 'PDF', pages: [p] }); else photos.push(p); });
+  if (photos.length) docs.push({ nom: photos.length > 1 ? photos.length + ' photos' : 'Photo', pages: photos });
+  return docs;
+}
+/** Après une facture validée ou abandonnée : la suivante de la file. */
+function nextVerif(msg) {
+  if (VQUEUE.length) {
+    VERIF = VQUEUE.shift(); saveVerif();
+    if (msg) toast(msg, 'Facture suivante : ' + (VERIF.fourNom || 'à vérifier'));
+    go('verif', {}, { replace: true }); return true;
+  }
+  VERIF = null; saveVerif(); return false;
+}
 
 /* ---------------- fichiers : photo ou PDF ---------------- */
 
@@ -55,17 +72,17 @@ SCREENS.facture = function () {
   var inputs = '<input type="file" accept="image/*" capture="environment" data-files id="inPhoto" class="hidden">' +
     '<input type="file" accept="image/*,application/pdf" multiple data-files id="inFile" class="hidden">';
   if (FACT.busy) {
-    var steps = ['J\'envoie la facture…', 'Je lis les lignes…', 'Je cherche dans ton stock…', 'Encore un instant…'];
+    var P = FACT.prog || [], nb = P.length;
     html += '<div class="scan-wrap"><div class="scan-doc">' + (FACT.pages[0] && FACT.pages[0].thumb ? '<img src="' + FACT.pages[0].thumb + '" alt="">' : ic('file')) + '<i class="scan-bar"></i></div>' +
-      '<div class="scan-title">Je lis la facture…</div><div class="scan-step">' + steps[Math.min(FACT.step, steps.length - 1)] + '</div>' +
-      '<p style="color:var(--muted);font-size:14px;text-align:center;margin:0">Ça prend en général 10 à 30 secondes.</p></div>';
+      '<div class="scan-title">' + (nb > 1 ? 'Je lis les ' + nb + ' factures…' : 'Je lis la facture…') + '</div>' + progList(P) +
+      '<p style="color:var(--muted);font-size:14px;text-align:center;margin:0">Ça prend en général 10 à 30 secondes' + (nb > 1 ? ' (elles sont lues en même temps)' : '') + '.</p></div>';
     return html + '</div></div>';
   }
   if (VERIF && !FACT.pages.length) {
     html += '<button class="row" style="border:2px solid #F6B969;margin-bottom:14px" data-a="go" data-r="verif">' + ic('file') +
-      '<div class="grow"><span class="t">Vérification en cours</span><span class="s">' + esc((VERIF.fourNom || 'Facture') + (VERIF.numero ? ' · n° ' + VERIF.numero : '')) + ' · à terminer</span></div>' + ic('chev') + '</button>';
+      '<div class="grow"><span class="t">Vérification en cours</span><span class="s">' + esc((VERIF.fourNom || 'Facture') + (VERIF.numero ? ' · n° ' + VERIF.numero : '')) + ' · à terminer' + (VQUEUE.length ? ' (+ ' + VQUEUE.length + ' autre' + (VQUEUE.length > 1 ? 's' : '') + ')' : '') + '</span></div>' + ic('chev') + '</button>';
   }
-  if (FACT.err) html += '<div class="hint" style="background:var(--red-bg);color:var(--red-ink)"><b>Lecture impossible.</b> ' + esc(FACT.err) + '</div>';
+  if (FACT.err) html += '<div class="hint" style="background:var(--red-bg);color:var(--red-ink)"><b>Lecture impossible.</b> ' + esc(FACT.err) + '</div>' + (FACT.prog && FACT.prog.length > 1 ? progList(FACT.prog) : '');
   if (!FACT.pages.length) {
     html += '<label for="inPhoto" class="big-pick main">' + '<span class="ico">' + ic('camera') + '</span><span><b>Photographier la facture</b><span>Une ou plusieurs photos si elle est longue</span></span></label>' +
       '<label for="inFile" class="big-pick">' + '<span class="ico soft">' + ic('file') + '</span><span><b>Choisir un PDF ou une image</b><span>Une facture déjà sur le téléphone</span></span></label>' +
@@ -88,31 +105,51 @@ SCREENS.facture = function () {
 };
 A.fDel = function (d) { FACT.pages.splice(+d.i, 1); render(false); };
 A.fClear = function () { FACT.pages = []; FACT.err = ''; render(false); };
+function progList(P) {
+  return '<div class="fprog">' + P.map(function (x, i) {
+    var s = Math.round((Date.now() - x.t0) / 1000);
+    var st = x.etat === 'prep' ? 'Préparation…' : x.etat === 'lit' ? 'Gemini lit les lignes… ' + s + ' s' : x.etat === 'ok' ? esc(x.four || 'Fournisseur ?') + ' — ' + x.n + ' ligne' + (x.n > 1 ? 's' : '') + ' trouvée' + (x.n > 1 ? 's' : '') :
+      x.etat === 'skip' ? 'Pas une facture de matériel : ignorée' : 'Erreur : ' + esc(x.msg || '');
+    return '<div class="fp ' + x.etat + '"><span class="fp-i">' + (x.etat === 'ok' ? '✓' : x.etat === 'skip' ? '–' : x.etat === 'err' ? '!' : '<i class="spin"></i>') + '</span><span class="grow"><b>' + (P.length > 1 ? 'Facture ' + (i + 1) + ' · ' : '') + esc(x.nom) + '</b><span>' + st + '</span></span></div>';
+  }).join('') + '</div>';
+}
 A.fRead = function () {
   if (!FACT.pages.length || FACT.busy) return;
-  FACT.busy = true; FACT.err = ''; FACT.step = 0; render(true);
+  var docs = groupDocs(FACT.pages), t0 = Date.now();
+  FACT.prog = docs.map(function (d) { return { nom: d.nom, etat: 'prep', t0: t0 }; });
+  FACT.busy = true; FACT.err = ''; render(true);
   clearInterval(FACT.timer);
-  FACT.timer = setInterval(function () { FACT.step++; if (VIEW.r === 'facture') render(false); }, 5000);
-  archivePages(FACT.pages).then(function (archive) {
-    return call('facture', [CFG.code, { files: FACT.pages.map(function (p) { return { mime: p.mime, data: p.data }; }), archive: archive }], 150000);
-  })
-    .then(function (doc) {
-      clearInterval(FACT.timer); FACT.busy = false;
-      if (!doc.est_document_achat && !(doc.lignes || []).length) { FACT.err = 'Ce document ne ressemble pas à une facture de matériel.'; render(false); return; }
-      VERIF = buildVerif(doc); saveVerif();
-      var pages = FACT.pages; FACT.pages = [];
-      go('verif', {}, { replace: true });
+  FACT.timer = setInterval(function () { if (VIEW.r === 'facture') render(false); }, 1000);
+  var lus = [];
+  Promise.all(docs.map(function (d, i) {
+    var P = FACT.prog[i];
+    return archivePages(d.pages).then(function (archive) {
+      P.etat = 'lit'; P.t0 = Date.now(); if (VIEW.r === 'facture') render(false);
+      return call('facture', [CFG.code, { files: d.pages.map(function (p) { return { mime: p.mime, data: p.data }; }), archive: archive }], 150000);
+    }).then(function (doc) {
+      if (!doc.est_document_achat && !(doc.lignes || []).length) { P.etat = 'skip'; return; }
+      var v = buildVerif(doc); v.deja = doc.deja || null; P.etat = 'ok'; P.n = (doc.lignes || []).length; P.four = v.fourNom || (v.four ? fourName(v.four) : '');
+      lus[i] = v;
       // logo du fournisseur : découpé dans la facture (si Gemini l'a trouvé), proposé pour sa fiche
-      cropLogo(pages, doc).then(function (logo) {
-        if (!logo || !VERIF) return;
-        VERIF.logo = logo; saveVerif(); if (VIEW.r === 'verif') render(false);
-      }).catch(function () {});
-    })
-    .catch(function (e) {
-      clearInterval(FACT.timer); FACT.busy = false;
-      FACT.err = e.code === 'NOKEY' ? 'La clé Gemini n\'est pas encore installée dans le script (voir le guide).' : e.message;
-      render(false);
-    });
+      cropLogo(d.pages, doc).then(function (logo) { if (!logo) return; v.logo = logo; if (v === VERIF || VQUEUE.indexOf(v) >= 0) { saveVerif(); if (VIEW.r === 'verif') render(false); } }).catch(function () {});
+    }).catch(function (e) {
+      P.etat = 'err'; P.msg = e.code === 'NOKEY' ? 'la clé Gemini n\'est pas encore installée dans le script (voir le guide).' : e.message;
+    }).then(function () { if (VIEW.r === 'facture') render(false); });
+  })).then(function () {
+    clearInterval(FACT.timer); FACT.busy = false;
+    var ok = lus.filter(Boolean), P = FACT.prog, ign = P.filter(function (x) { return x.etat === 'skip'; }).length, err = P.filter(function (x) { return x.etat === 'err'; });
+    if (!ok.length) {
+      FACT.err = P.length === 1 ? (err.length ? err[0].msg : 'Ce document ne ressemble pas à une facture de matériel.') : 'Aucune facture de matériel trouvée.';
+      render(false); return;
+    }
+    ok.forEach(function (v, i) { v.pos = i + 1; v.tot = ok.length; });
+    FACT.pages = [];
+    if (VERIF) VQUEUE = VQUEUE.concat(ok); else { VERIF = ok[0]; VQUEUE = VQUEUE.concat(ok.slice(1)); }
+    saveVerif();
+    var autres = [ign ? ign + ' ignorée' + (ign > 1 ? 's' : '') + ' (pas du matériel)' : '', err.length ? err.length + ' illisible' + (err.length > 1 ? 's' : '') : ''].filter(Boolean).join(' · ');
+    if (ok.length > 1 || autres) toast(ok.length + ' facture' + (ok.length > 1 ? 's' : '') + ' à vérifier', autres || 'l\'une après l\'autre');
+    go('verif', {}, { replace: true });
+  });
 };
 
 /* ---------------- archive légère : pages en JPEG (1600 px, très lisibles) ---------------- */
@@ -262,7 +299,8 @@ SCREENS.verif = function () {
   var nOk = V.lignes.filter(function (l) { return l.statut === 'ok' || l.statut === 'create'; }).length;
   var nCheck = V.lignes.filter(function (l) { return l.statut === 'check'; }).length, nNew = V.lignes.filter(function (l) { return l.statut === 'new'; }).length;
   var dup = V.four && V.numero && M.factures.filter(function (f) { return f.fournisseur === V.four && norm(f.numero) === norm(V.numero); })[0];
-  var html = '<div class="screen">' + head({ cls: 'green', title: 'Vérifier la facture', backAct: 'vBack',
+  if (!dup && V.deja && (!V.four || V.four === V.deja.fournisseur)) dup = V.deja;   // vérifié par le script (salarié)
+  var html = '<div class="screen">' + head({ cls: 'green', title: V.tot > 1 ? 'Facture ' + V.pos + '/' + V.tot : 'Vérifier la facture', backAct: 'vBack',
     sub: esc([V.four ? fourName(V.four) : V.fourNom, V.numero ? 'n° ' + V.numero : '', fday(V.date), V.total !== null ? fe(V.total) + ' HT' : ''].filter(Boolean).join(' · ')),
     extra: '<div class="vchips"><span class="vc ok">' + nOk + ' reconnue' + (nOk > 1 ? 's' : '') + '</span>' + (nCheck ? '<span class="vc check">' + nCheck + ' à vérifier</span>' : '') + (nNew ? '<span class="vc new">' + nNew + ' nouveau' + (nNew > 1 ? 'x' : '') + '</span>' : '') + '</div>' }) +
     '<div class="scroll nonav" style="padding-bottom:170px">';
@@ -376,7 +414,7 @@ A.vCancel = function () {
     if (!ok) return;
     // le logo trouvé reste utile même si la facture n'est pas rangée
     var M = D(); if (VERIF.logo && VERIF.four && M.four[VERIF.four] && !M.four[VERIF.four].logo) commit(put('Fournisseurs', { id: VERIF.four, logo: VERIF.logo }));
-    VERIF = null; saveVerif(); go('facture', {}, { replace: true });
+    if (!nextVerif('Facture abandonnée')) go('facture', {}, { replace: true });
   });
 };
 function hashKey(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
@@ -393,7 +431,11 @@ A.vValidate = function () {
     } else if (M.prod[pid] && !M.prod[pid].four) ops.push(put('Produits', { id: pid, four: four }));
     ops.push(put('Mouvements', { id: uid('m'), date: now, produit: pid, delta: String(round3(l.qte * l.facteur)), type: 'entree', qui: ME, lieu: lab, fournisseur: four, prix: unitPrice === null ? '' : String(unitPrice), note: fid }));
     var ex = (M.prix[pid] || []).filter(function (x) { return x.fournisseur === four; })[0];
-    ops.push(put('Prix', { id: ex ? ex.id : uid('x'), produit: pid, fournisseur: four, prix: unitPrice === null ? (ex ? ex.prix : '') : String(unitPrice), ref: l.ref || (ex ? ex.ref : ''), maj: unitPrice === null ? (ex ? ex.maj : '') : now }));
+    // seulement ce qui est connu : un salarié ne voit pas les prix existants, le script retrouve la bonne ligne (V1.20)
+    var pr = { id: ex ? ex.id : uid('x'), produit: pid, fournisseur: four };
+    if (unitPrice !== null) { pr.prix = String(unitPrice); pr.maj = now; }
+    if (l.ref) pr.ref = l.ref;
+    if (ex || unitPrice !== null || l.ref) ops.push(put('Prix', pr));
     var key = lineKey(four, l.libelle);
     ops.push(put('Alias', { id: 'a' + hashKey(key), fournisseur: four, libelle: key.split('|')[1], produit: pid, facteur: String(l.facteur), maj: now }));
     n++;
@@ -401,7 +443,7 @@ A.vValidate = function () {
   if (V.logo && four && !(M.four[four] && M.four[four].logo)) ops.push(put('Fournisseurs', { id: four, logo: V.logo }));
   ops.push(put('Factures', { id: fid, date: V.date, fournisseur: four, numero: V.numero, total: V.total === null ? '' : String(V.total), lignes: String(n), fichiers: (V.fichiers || []).join(' '), qui: ME, rangee: now }));
   commit(ops);
-  VERIF = null; saveVerif();
+  if (nextVerif('Facture rangée')) return;
   toast('Facture rangée', n + ' entrée' + (n > 1 ? 's' : '') + ' en stock · prix à jour');
   go('home', {}, { replace: true });
 };
