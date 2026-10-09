@@ -81,7 +81,7 @@ function isTyping() { var a = document.activeElement; return a && /^(INPUT|TEXTA
 function render(top) {
   var y = window.scrollY;
   var fn = SCREENS[VIEW.r] || SCREENS.home;
-  if (VIEW.r !== 'boot' && VIEW.r !== 'login' && !me()) { VIEW = { r: 'login', p: {} }; fn = SCREENS.login; saveView(); }
+  if (VIEW.r !== 'boot' && VIEW.r !== 'login' && VIEW.r !== 'acces' && !me()) { VIEW = { r: 'login', p: {} }; fn = SCREENS.login; saveView(); }
   document.body.classList.toggle('has-bar', false);
   root.innerHTML = (IS_TEST ? '<div class="testtag" aria-hidden="true">TEST</div>' : '') + fn(VIEW.p);
   stickUnderHead();
@@ -290,6 +290,21 @@ A.retry = function () { flush(); render(false); };
 /* ================= démarrage / connexion ================= */
 var SCREENS = {};
 
+/* V1.19 : téléphone sans accès (pas de lien d'invitation, ou accès coupé) */
+SCREENS.acces = function (p) {
+  return '<div class="login"><img class="logo" src="icons/logo-blanc.png" alt="EURL Da Costa, couverture zinguerie">' +
+    '<h1>Accès à l\'appli</h1><p>Ouvre le <b>lien d\'invitation</b> que le patron t\'a envoyé (WhatsApp ou SMS) : il te connecte tout seul.</p>' +
+    '<p style="font-size:13px;margin-top:22px">Administrateur :</p><div class="field" style="max-width:320px;margin:0 auto"><input id="adm" class="inp" type="password" autocomplete="off" placeholder="Code administrateur" style="text-align:center"></div>' +
+    '<button class="btn light" style="max-width:320px;margin:10px auto 0" data-a="accesOk">Valider</button><div class="err" id="accErr">' + esc(p.err || '') + '</div></div>';
+};
+A.accesOk = function () {
+  var v = (document.getElementById('adm').value || '').trim(); if (!v) return;
+  call('ping', [v], 20000).then(function () {
+    LS.set('cle', v); CFG.code = v; SYNC.err = ''; SYNC.errCode = '';
+    go('boot', {}, { replace: true }); flush();
+  }).catch(function () { var e = document.getElementById('accErr'); if (e) e.textContent = 'Code refusé.'; });
+};
+window.onAccesCoupe = function () { if (VIEW.r !== 'acces') { ME = null; go('acces', {}, { replace: true }); } };
 SCREENS.boot = function () {
   var err = SYNC.err && !SYNC.busy;
   return '<div class="loading"><img src="icons/logo-blanc.png" alt="EURL Da Costa">' +
@@ -317,7 +332,8 @@ SCREENS.login = function (p) {
       (step === 'enter' ? '<p style="margin-top:8px;font-size:13px">Code oublié ? ' + (u.role === 'patron' ? 'Efface la case « pin » de ta ligne dans l\'onglet Utilisateurs du Google Sheet.' : 'Demande au patron de le réinitialiser (Réglages › Équipe).') + '</p>' : '') +
       '</div>';
   }
-  var users = M.usersActifs;
+  // V1.19 : un téléphone invité par lien ne peut entrer QUE sous le nom de la personne invitée
+  var users = SYNC.moi ? M.usersActifs.filter(function (u) { return u.id === SYNC.moi; }) : M.usersActifs;
   return '<div class="login"><img class="logo" src="icons/logo-blanc.png" alt="EURL Da Costa, couverture zinguerie">' +
     '<h1>Qui es-tu ?</h1><p>Choix fait une seule fois sur ce téléphone</p>' +
     users.map(function (u) {
@@ -1041,6 +1057,7 @@ SCREENS.reglages = function () {
         '<p style="font-size:13px;color:var(--muted);margin:8px 0 0">' + fmo(fi.octets) + ' de factures' + (fi.driveLimite ? ' · Google Drive : ' + fgo(fi.driveUtilise) + ' utilisés sur ' + fgo(fi.driveLimite) : '') + '. Rangées dans le dossier « Factures » à côté du Google Sheet.</p>'
         : '<p id="finfo" style="font-size:13px;color:var(--muted);margin:4px 0 0">Calcul de la place utilisée…</p>') + '</div>';
   }
+  if (typeof notifCard === 'function') html += notifCard();
   if (patron && typeof voixCard === 'function') html += voixCard();
   html += '<div class="card"><div class="card-title"><h2>Synchronisation</h2>' + (SYNC.err ? '<span class="badge rupt">problème</span>' : OUTBOX.length ? '<span class="badge bas">en cours</span>' : '<span class="badge ok">à jour</span>') + '</div>' +
     '<div class="kv"><span>Dernier échange avec le Google Sheet</span><span>' + lastTxt + '</span></div>' +
@@ -1099,18 +1116,35 @@ A.newUser = function () { go('user', { f: { isNew: true, nom: '', nomFamille: ''
 function userForm(u) { return { isNew: false, id: u.id, nom: u.nom, nomFamille: u.nomFamille || '', tel: u.tel || '', role: u.role || 'salarie' }; }
 A.editUser = function (d) { go('user', { f: userForm(D().user[d.id]) }); };
 function appLink() { return location.origin + location.pathname.replace(/index\.html$/, ''); }
-function inviteText(u) {
+function inviteText(u, lien) {
   var boss = me() ? me().nom : 'Jimmy';
   return 'Salut ' + u.nom + ' ! C\'est ' + boss + ' 👋\n\n' +
-    'J\'ai mis en place une appli pour gérer le stock de l\'atelier. Installe-la sur ton téléphone avec ce lien :\n' + appLink() + '\n\n' +
+    'J\'ai mis en place une appli pour gérer le stock de l\'atelier. Installe-la sur ton téléphone avec ce lien (il est personnel, ne le transfère à personne) :\n' + (lien || appLink()) + '\n\n' +
     '1. Ouvre le lien et appuie sur « Installer » (sur iPhone : bouton Partager puis « Sur l\'écran d\'accueil »).\n' +
     '2. Choisis ton prénom et invente ton code à 4 chiffres.\n\n' +
     'Ensuite c\'est simple : quand tu prends du matériel, tu fais SORTIE. Quand tu ranges une livraison, tu fais ENTRÉE.\n\nMerci !';
 }
-function openInvite(u) {
-  openMsg({ title: 'Inviter ' + u.nom, sub: 'Le message avec le lien de l\'appli. Modifie-le si tu veux, puis choisis comment l\'envoyer.',
-    text: inviteText(u), tel: u.tel, subject: 'Appli du stock', hint: u.tel ? '' : 'Ajoute son numéro pour que WhatsApp et SMS s\'ouvrent directement sur sa conversation.' });
+/** Invitation = lien PERSONNEL (son code d'accès est caché dedans). `nouveau` : coupe l'ancien accès et en refait un. */
+function openInvite(u, nouveau) {
+  if (!u) return;
+  toast('Préparation du lien…', 'Lien personnel de ' + u.nom);
+  var essai = function (n) {
+    return flush().then(function () { return call('jeton', [CFG.code, { id: u.id, nouveau: !!nouveau }], 30000); }).catch(function (e) {
+      if (n < 4 && /inconnue/i.test(e.message || '')) return new Promise(function (r) { setTimeout(r, 1500); }).then(function () { return essai(n + 1); });   // pas encore arrivé dans le Sheet
+      throw e;
+    });
+  };
+  essai(0).then(function (r) {
+    var lien = appLink() + '#cle=' + r.jeton;
+    openMsg({ title: 'Inviter ' + u.nom, sub: 'Son lien est personnel : il ne marche que pour ' + u.nom + '. Retirer ' + u.nom + ' de l\'équipe coupe son accès.',
+      text: inviteText(u, lien), tel: u.tel, subject: 'Appli du stock', hint: u.tel ? '' : 'Ajoute son numéro pour que WhatsApp et SMS s\'ouvrent directement sur sa conversation.' });
+  }).catch(function (e) { toast('Lien impossible pour le moment', e.message || 'Il faut être connecté à Internet'); });
 }
+A.newAccess = function () {
+  var u = D().user[VIEW.p.f.id]; if (!u) return;
+  ask({ title: 'Couper l\'accès actuel de ' + u.nom + ' ?', text: 'Son téléphone n\'aura plus accès (téléphone perdu, changé…). Tu pourras lui envoyer un nouveau lien.', ok: 'Couper et refaire un lien', danger: true })
+    .then(function (ok) { if (ok) openInvite(u, true); });
+};
 A.invite = function () { var u = D().user[VIEW.p.f.id]; if (u) openInvite(u); };
 SCREENS.user = function (p) {
   var f = p.f, u = f.isNew ? null : D().user[f.id];
@@ -1120,8 +1154,10 @@ SCREENS.user = function (p) {
     '<div class="field"><label for="utel">Téléphone <span class="help">(pour lui envoyer l\'invitation)</span></label><input id="utel" class="inp" type="tel" inputmode="tel" data-i="uf" data-k="tel" autocomplete="off" value="' + esc(f.tel) + '" placeholder="ex. 06 12 34 56 78"></div>' +
     '<div class="field"><span class="flabel">Rôle</span><div class="chips wrap"><button class="chip ' + (f.role === 'salarie' ? 'on' : '') + '" data-a="ufRole" data-v="salarie">Salarié : entrées et sorties</button>' +
     '<button class="chip ' + (f.role === 'patron' ? 'on' : '') + '" data-a="ufRole" data-v="patron">Patron : tout l\'accès</button></div></div>' +
-    (u && u.id !== ME ? '<button class="btn" style="margin-bottom:14px" data-a="invite">' + ic('share') + 'Envoyer l\'invitation</button>' : '') +
-    (u ? '<div class="card"><div class="kv"><span>Code</span><span>' + (u.pin ? 'choisi' : 'à choisir au prochain lancement') + '</span></div></div>' +
+    (u && u.actif !== '0' ? '<button class="btn" style="margin-bottom:10px" data-a="invite">' + ic('share') + 'Envoyer son lien d\'accès</button>' : '') +
+    (u && u.actif !== '0' && u.acces ? '<button class="btn light" style="margin-bottom:14px" data-a="newAccess">' + ic('x') + 'Couper son accès actuel (téléphone perdu…)</button>' : '') +
+    (u ? '<div class="card"><div class="kv"><span>Accès</span><span>' + (u.actif === '0' ? 'coupé' : u.acces ? 'lien personnel envoyé' : 'pas encore de lien') + '</span></div><div class="kv"><span>Code</span><span>' + (u.pin ? 'choisi' : 'à choisir au prochain lancement') + '</span></div></div>' +
+      (typeof notifUserCard === 'function' ? notifUserCard(u) : '') +
       (u.pin ? '<button class="btn light" style="margin-bottom:10px" data-a="userPin">Réinitialiser son code</button>' : '') +
       (u.id !== ME ? (u.actif === '0' ? '<button class="btn light" data-a="userActif" data-v="1">Remettre dans l\'équipe</button>' : '<button class="btn danger" data-a="userActif" data-v="0">' + ic('trash') + 'Retirer de l\'équipe</button>') : '') : '') +
     '</div><div class="bottom-bar"><button class="btn green" data-a="saveUser">' + (f.isNew ? 'Ajouter' : 'Enregistrer') + '</button></div></div>';

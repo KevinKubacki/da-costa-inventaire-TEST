@@ -433,3 +433,22 @@ select.inp{appearance:none;-webkit-appearance:none;background-image:url("data:im
 .say[data-s="load"] .say-lab::after{content:' · la voix arrive…';text-transform:none;letter-spacing:0;font-weight:600;color:#fff}
 .voix-grid button.load{position:relative}
 .voix-grid button.load::after{content:'';position:absolute;top:6px;right:6px;width:12px;height:12px;border-radius:50%;border:2px solid var(--navy-soft);border-top-color:var(--navy);animation:spin .8s linear infinite}
+
+/* V1.20 : déroulé de la lecture des factures */
+.fprog{width:100%;display:flex;flex-direction:column;gap:8px;margin:6px 0 12px}
+.fp{display:flex;gap:10px;align-items:center;background:#fff;border:1px solid var(--line,#E3E3EA);border-radius:12px;padding:10px 12px;text-align:left}
+.fp b{display:block;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fp .grow{min-width:0}
+.fp .grow>span{display:block;font-size:14px;color:var(--muted)}
+.fp-i{flex:0 0 28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;background:#EEF;color:#2E2C6E}
+.fp.ok .fp-i{background:#DFF3E7;color:#157F4A}.fp.ok .grow>span{color:#157F4A;font-weight:600}
+.fp.skip .fp-i{background:#F1F1F4;color:#888}
+.fp.err .fp-i{background:#FDE3E1;color:#C2362B}.fp.err .grow>span{color:#C2362B}
+.fp .spin{width:16px;height:16px;border:3px solid #C9C8E6;border-top-color:#2E2C6E;border-radius:50%;animation:fpspin .8s linear infinite}
+@keyframes fpspin{to{transform:rotate(360deg)}}
+/* V1.21 : interrupteur (alertes de stock d'un salarié) */
+.toggle-row{display:flex;align-items:center;gap:12px;width:100%;background:none;border:0;border-top:1px solid var(--line,#E3E3EA);margin-top:8px;padding:12px 0 2px;text-align:left;font:inherit;color:inherit;cursor:pointer}
+.toggle-row b{display:block;font-size:16px}.toggle-row .grow>span{display:block;font-size:13px;color:var(--muted)}
+.toggle-row .sw{flex:0 0 46px;height:28px;border-radius:14px;background:#CFCFD8;position:relative;transition:background .2s}
+.toggle-row .sw i{position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .2s}
+.toggle-row .sw.on{background:#157F4A}.toggle-row .sw.on i{left:21px}
