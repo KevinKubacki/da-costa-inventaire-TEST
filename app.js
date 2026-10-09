@@ -294,9 +294,10 @@ var SCREENS = {};
 SCREENS.acces = function (p) {
   return '<div class="login"><img class="logo" src="icons/logo-blanc.png" alt="EURL Da Costa, couverture zinguerie">' +
     '<h1>Accès à l\'appli</h1><p>Ouvre le <b>lien d\'invitation</b> que le patron t\'a envoyé (WhatsApp ou SMS) : il te connecte tout seul.</p>' +
-    '<p style="font-size:13px;margin-top:22px">Administrateur :</p><div class="field" style="max-width:320px;margin:0 auto"><input id="adm" class="inp" type="password" autocomplete="off" placeholder="Code administrateur" style="text-align:center"></div>' +
+    '<p style="font-size:13px;margin-top:22px">Administrateur :</p><div class="field adm-field" style="max-width:320px;margin:0 auto;position:relative"><input id="adm" class="inp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Code administrateur" style="text-align:center;color:#1B1A3A;background:#fff;padding-right:52px"><button type="button" class="adm-eye" data-a="admEye" aria-label="Voir le code">👁</button></div>' +
     '<button class="btn light" style="max-width:320px;margin:10px auto 0" data-a="accesOk">Valider</button><div class="err" id="accErr">' + esc(p.err || '') + '</div></div>';
 };
+A.admEye = function () { var i = document.getElementById('adm'); if (!i) return; i.type = i.type === 'password' ? 'text' : 'password'; i.focus(); };
 A.accesOk = function () {
   var v = (document.getElementById('adm').value || '').trim(); if (!v) return;
   call('ping', [v], 20000).then(function () {

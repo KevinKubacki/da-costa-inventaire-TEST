@@ -1,6 +1,6 @@
 // Service worker : l'appli s'ouvre même sans réseau, et se met à jour toute seule.
 // ⚠ Changer VERSION à chaque livraison (sinon les téléphones gardent l'ancienne version).
-const VERSION = '2.1-2026-10-09';
+const VERSION = '2.2-2026-10-09';
 // Nom du cache propre à CE dossier (officielle /stock/ et test /stock-test/ peuvent être sur le même compte GitHub)
 const SCOPE = new URL(self.registration.scope).pathname;
 const PREFIX = 'stock-dacosta:' + SCOPE + ':';

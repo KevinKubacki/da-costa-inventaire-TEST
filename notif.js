@@ -41,7 +41,7 @@ A.pushOn = function () {
   if (PUSH.busy) return;
   PUSH.busy = true; PUSH.err = ''; render(false);
   Notification.requestPermission().then(function (p) {
-    if (p !== 'granted') throw new Error(p === 'denied' ? 'Tu as refusé les notifications. Pour changer d\'avis : réglages du téléphone › Chrome › Notifications.' : 'Pas d\'autorisation donnée.');
+    if (p !== 'granted') throw new Error(p === 'denied' ? 'Notifications refusées pour cette appli.' : 'Le téléphone n\'a pas affiché la demande d\'autorisation.');
     return pushAbonner(true);
   }).then(function () { PUSH.busy = false; toast('Notifications activées', 'Tu peux envoyer un essai'); render(false); })
     .catch(function (e) { PUSH.busy = false; PUSH.err = e.message || String(e); render(false); });
@@ -64,7 +64,7 @@ function notifCard() {
   if (!pushOk()) return h + '<p style="font-size:14px;color:var(--muted);margin:0">Ce navigateur ne sait pas recevoir de notifications. Ouvre l\'appli installée sur le téléphone (Android).</p></div>';
   h += '<p style="font-size:14px;color:var(--muted);margin:0 0 10px">Tu reçois sur ce téléphone : ' + recoit + '.</p>';
   if (PUSH.err) h += '<div class="hint" style="background:var(--red-bg);color:var(--red-ink)">' + esc(PUSH.err) + '</div>';
-  if (Notification.permission === 'denied') return h + '<div class="hint" style="background:var(--orange-bg);color:#7A3D00">Bloquées sur ce téléphone. Pour les autoriser : réglages du téléphone › Applis › Chrome (ou l\'appli Stock) › Notifications.</div></div>';
+  if (Notification.permission === 'denied') return h + '<div class="hint" style="background:var(--orange-bg);color:#7A3D00"><b>Bloquées pour cette appli.</b> Pour les autoriser : ouvre <b>Chrome</b> › ⋮ › Paramètres › Paramètres des sites › Notifications › <b>' + esc(location.host) + '</b> › Autoriser. Puis reviens ici et appuie sur « Activer ».</div><button class="btn light" data-a="pushOn">Activer les notifications</button></div>';
   if (pushMine()) return h + '<button class="btn light" data-a="pushEssai"' + (PUSH.busy ? ' disabled' : '') + '>' + (PUSH.busy ? 'Envoi…' : 'Envoyer une notification d\'essai') + '</button></div>';
   return h + '<button class="btn" data-a="pushOn"' + (PUSH.busy ? ' disabled' : '') + '>' + (PUSH.busy ? 'Activation…' : 'Activer les notifications') + '</button></div>';
 }

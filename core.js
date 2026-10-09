@@ -1,7 +1,7 @@
 /* Stock Da Costa — données locales, synchronisation automatique, calculs */
 'use strict';
 
-var APP_VERSION = '2.1';
+var APP_VERSION = '2.2';
 window.STOCK_V2 = true;   // dit au filet de sécurité de config.js que cette version est à jour
 var CFG = window.STOCK_CONFIG || {};
 var IS_TEST = CFG.test === true;                       // version de test de Kevin (config.js : test: true)
