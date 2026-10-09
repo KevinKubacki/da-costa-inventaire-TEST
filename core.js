@@ -1,7 +1,8 @@
 /* Stock Da Costa — données locales, synchronisation automatique, calculs */
 'use strict';
 
-var APP_VERSION = '1.21';
+var APP_VERSION = '2.1';
+window.STOCK_V2 = true;   // dit au filet de sécurité de config.js que cette version est à jour
 var CFG = window.STOCK_CONFIG || {};
 var IS_TEST = CFG.test === true;                       // version de test de Kevin (config.js : test: true)
 var NS = IS_TEST ? 'stock-test:' : 'stock:';            // mémoire du téléphone séparée entre test et officielle

@@ -1,6 +1,6 @@
 // Service worker : l'appli s'ouvre même sans réseau, et se met à jour toute seule.
 // ⚠ Changer VERSION à chaque livraison (sinon les téléphones gardent l'ancienne version).
-const VERSION = '1.21-2026-10-09';
+const VERSION = '2.1-2026-10-09';
 // Nom du cache propre à CE dossier (officielle /stock/ et test /stock-test/ peuvent être sur le même compte GitHub)
 const SCOPE = new URL(self.registration.scope).pathname;
 const PREFIX = 'stock-dacosta:' + SCOPE + ':';
@@ -15,7 +15,8 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
+  // un fichier manquant ne doit jamais bloquer la mise à jour (avant : un seul échec = l'ancienne version restait)
+  e.waitUntil(caches.open(CACHE).then((c) => Promise.all(ASSETS.map((u) => c.add(new Request(u, { cache: 'reload' })).catch(() => {})))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
