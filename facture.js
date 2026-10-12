@@ -128,7 +128,7 @@ A.fRead = function () {
       return call('facture', [CFG.code, { files: d.pages.map(function (p) { return { mime: p.mime, data: p.data }; }), archive: archive }], 150000);
     }).then(function (doc) {
       if (!doc.est_document_achat && !(doc.lignes || []).length) { P.etat = 'skip'; return; }
-      var v = buildVerif(doc); v.deja = doc.deja || null; P.etat = 'ok'; P.n = (doc.lignes || []).length; P.four = v.fourNom || (v.four ? fourName(v.four) : '');
+      var v = buildVerif(doc); v.deja = doc.deja || null; v.vid = uid('v'); if (window.ORIG) ORIG[v.vid] = d.pages; P.etat = 'ok'; P.n = (doc.lignes || []).length; P.four = v.fourNom || (v.four ? fourName(v.four) : '');
       lus[i] = v;
       // logo du fournisseur : découpé dans la facture (si Gemini l'a trouvé), proposé pour sa fiche
       cropLogo(d.pages, doc).then(function (logo) { if (!logo) return; v.logo = logo; if (v === VERIF || VQUEUE.indexOf(v) >= 0) { saveVerif(); if (VIEW.r === 'verif') render(false); } }).catch(function () {});

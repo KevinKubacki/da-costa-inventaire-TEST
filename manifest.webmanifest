@@ -47,5 +47,22 @@
         }
       ]
     }
-  }
+  },
+  "file_handlers": [
+    {
+      "action": "./?ouvrir=1",
+      "accept": {
+        "application/pdf": [
+          ".pdf"
+        ],
+        "image/jpeg": [
+          ".jpg",
+          ".jpeg"
+        ],
+        "image/png": [
+          ".png"
+        ]
+      }
+    }
+  ]
 }

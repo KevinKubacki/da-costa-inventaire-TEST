@@ -78,12 +78,20 @@ function stickUnderHead() {
 window.addEventListener('resize', function () { stickUnderHead(); });
 function isTyping() { var a = document.activeElement; return a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && !SHEET; }
 
+/* grand écran (ordinateur, tablette) : menu à gauche, écrans adaptés (bureau.js) */
+var MQ_WIDE = window.matchMedia ? window.matchMedia('(min-width: 900px)') : null, MQ_RAIL = window.matchMedia ? window.matchMedia('(max-width: 1199px)') : null;
+function wide() { return !!(MQ_WIDE && MQ_WIDE.matches); }
+if (MQ_WIDE && MQ_WIDE.addEventListener) MQ_WIDE.addEventListener('change', function () { if (!isTyping() && !SHEET) render(false); });
+if (MQ_RAIL && MQ_RAIL.addEventListener) MQ_RAIL.addEventListener('change', function () { if (!isTyping() && !SHEET) render(false); });
 function render(top) {
   var y = window.scrollY;
   var fn = SCREENS[VIEW.r] || SCREENS.home;
   if (VIEW.r !== 'boot' && VIEW.r !== 'login' && VIEW.r !== 'acces' && !me()) { VIEW = { r: 'login', p: {} }; fn = SCREENS.login; saveView(); }
   document.body.classList.toggle('has-bar', false);
-  root.innerHTML = (IS_TEST ? '<div class="testtag" aria-hidden="true">TEST</div>' : '') + fn(VIEW.p);
+  var html = fn(VIEW.p), desk = wide() && window.deskShell && me() && VIEW.r !== 'boot' && VIEW.r !== 'login' && VIEW.r !== 'acces';
+  document.body.classList.toggle('wide', !!desk); document.body.classList.toggle('rail', !!desk && !!(MQ_RAIL && MQ_RAIL.matches));
+  document.body.setAttribute('data-r', VIEW.r);
+  root.innerHTML = (IS_TEST ? '<div class="testtag" aria-hidden="true">TEST</div>' : '') + (desk ? window.deskShell(html) : html);
   stickUnderHead();
   PENDING_RENDER = false;
   document.body.classList.toggle('has-bar', !!root.querySelector('.bottom-bar'));
@@ -439,7 +447,7 @@ function prodList(list, act) {
 I.q = function (v) {
   VIEW.p.q = v; saveView();
   var list = filterProds(v, VIEW.p.f), el = document.getElementById('plist');
-  if (el) el.innerHTML = prodList(list, VIEW.r === 'pick' ? 'pickProd' : 'openProd');
+  if (el) el.innerHTML = wide() && VIEW.r === 'stock' && window.prodTable ? prodTable(sortProds(list, VIEW.p.sort), VIEW.p.sel) : prodList(list, VIEW.r === 'pick' ? 'pickProd' : 'openProd');
   var c = document.getElementById('pcount'); if (c) c.textContent = list.length + ' produit' + (list.length > 1 ? 's' : '');
   var r = document.getElementById('recents'); if (r) r.style.display = v ? 'none' : '';
 };
