@@ -286,7 +286,7 @@ function buildVerif(doc) {
   });
   return { source: 'facture', four: four, fourNom: upName(doc.fournisseur || ''), fourChoix: four ? 'ok' : '', numero: String(doc.numero || '').trim(),
     date: /^\d{4}-\d\d-\d\d$/.test(doc.date || '') ? doc.date : todayIsoDate(), total: numOrNull(doc.total_ht), type: doc.type_document || 'facture',
-    fichiers: doc.fichiers || [], lignes: lignes, modele: doc.modele || '' };
+    fichiers: doc.fichiers || [], lignes: lignes, modele: doc.modele || '', fourInfos: doc.fournisseur_infos || null };
 }
 
 /* ---------------- écran de vérification ---------------- */
@@ -308,9 +308,16 @@ SCREENS.verif = function () {
   if (V.logo && !(V.four && M.four[V.four] && M.four[V.four].logo)) {
     html += '<div class="vlogo"><img src="' + V.logo + '" alt="Logo du fournisseur"><div class="grow"><b>Logo trouvé</b><span>Il ira sur la fiche du fournisseur (même si tu abandonnes).</span></div><button class="link" data-a="vNoLogo">Ne pas le garder</button></div>';
   }
+  var nv = infosNouvelles(V);
+  if (nv) {
+    html += '<div class="vcard vinfos"><div class="vhead"><span class="dot ok"></span><span>Sur la facture, il y a aussi pour <b>' + esc(fourName(V.four)) + '</b> :</span></div><ul class="vinfo-list">' +
+      (nv.adresse ? '<li>Adresse : <b>' + esc(nv.adresse) + '</b></li>' : '') + nv.tels.map(function (t) { return '<li>' + esc(t.l || 'Téléphone') + ' : <b>' + esc(t.n) + '</b></li>'; }).join('') +
+      (nv.email ? '<li>Mail : <b>' + esc(nv.email) + '</b></li>' : '') + (nv.site ? '<li>Site : <b>' + esc(nv.site) + '</b></li>' : '') + (nv.client ? '<li>N° client : <b>' + esc(nv.client) + '</b></li>' : '') +
+      '</ul><div class="btn-row"><button class="btn" style="font-size:16px;height:48px;font-family:Barlow;font-weight:700" data-a="vInfosAdd">Ajouter à sa fiche</button><button class="btn light" style="height:48px" data-a="vInfosNo">Non merci</button></div></div>';
+  }
   if (!V.four) {
     html += '<div class="vcard check"><div class="vhead"><span class="dot check"></span><span>Fournisseur lu : <b>' + esc(V.fourNom || '?') + '</b></span></div>' +
-      '<span class="vq check">Il n\'est pas dans ta liste de fournisseurs.</span>' +
+      '<span class="vq check">Il n\'est pas dans ta liste de fournisseurs.' + (V.fourInfos && (V.fourInfos.adresse || (V.fourInfos.telephones || []).length) ? ' « Ajouter » crée sa fiche avec l\'adresse et les téléphones lus sur la facture.' : '') + '</span>' +
       '<div class="btn-row"><button class="btn" style="font-size:16px;height:48px;font-family:Barlow;font-weight:700" data-a="vFourNew">Ajouter</button><button class="btn light" style="height:48px" data-a="vFourPick">Choisir</button></div></div>';
   }
   var order = { check: 0, new: 1, create: 2, ok: 3, skip: 4 };
@@ -389,13 +396,35 @@ A.vQtyOk = function (d) {
   var q = numOrNull(document.getElementById('vq').value), f = numOrNull(document.getElementById('vf').value);
   closeSheet(function () { vSet(d.k, function (l) { if (q !== null && q > 0) l.qte = q; if (f !== null && f > 0) l.facteur = f; }); });
 };
+/** Nouveau fournisseur : sa fiche est pré-remplie avec ce que Gemini a lu sur la facture (V3.1). */
 A.vFourNew = function () {
-  askText({ title: 'Nouveau fournisseur', value: VERIF.fourNom ? VERIF.fourNom.charAt(0) + VERIF.fourNom.slice(1).toLowerCase() : '', ok: 'Ajouter' }).then(function (name) {
-    name = (name || '').trim(); if (!name) return;
-    var id = uid('f'); commit(put('Fournisseurs', { id: id, nom: name, contact: '', tel: '', email: '', adresse: '', notes: '', actif: '1' }));
-    VERIF.four = id; rematchAlias(); saveVerif(); render(false);
-  });
+  var V = VERIF, I0 = V.fourInfos || {}, nom = V.fourNom ? V.fourNom.charAt(0) + V.fourNom.slice(1).toLowerCase() : '';
+  var tels = (I0.telephones || []).filter(function (t) { return t && t.numero; }).map(function (t) { return { l: t.libelle || '', n: t.numero }; });
+  go('fourEdit', { f: { isNew: true, fromVerif: true, nom: nom, contact: '', telsL: tels.length ? tels : [{ l: 'Agence', n: '' }], email: I0.email || '', site: I0.site || '',
+    adresse: I0.adresse || '', notes: I0.numero_client ? 'N° client : ' + I0.numero_client : '' } });
 };
+/** Fournisseur déjà connu : ce que la facture apporte de plus que sa fiche. */
+function infosNouvelles(V) {
+  var f = V.four && D().four[V.four], I0 = V.fourInfos; if (!f || !I0 || V.infosOff) return null;
+  var r = {}, n = 0, deja = fourTels(f).map(function (t) { return telDigits(t.n); });
+  if (I0.adresse && !f.adresse) { r.adresse = I0.adresse; n++; }
+  if (I0.email && !f.email) { r.email = I0.email; n++; }
+  if (I0.site && !f.site) { r.site = I0.site; n++; }
+  r.tels = (I0.telephones || []).filter(function (t) { var d = telDigits(t && t.numero); return d.length >= 9 && deja.indexOf(d) < 0; }).map(function (t) { return { l: t.libelle || '', n: t.numero }; });
+  n += r.tels.length;
+  if (I0.numero_client && String(f.notes || '').indexOf(I0.numero_client) < 0) { r.client = I0.numero_client; n++; }
+  return n ? r : null;
+}
+A.vInfosAdd = function () {
+  var V = VERIF, f = D().four[V.four], r = infosNouvelles(V); if (!f || !r) return;
+  var row = { id: f.id }, tels = fourTels(f).concat(r.tels);
+  if (r.adresse) row.adresse = r.adresse; if (r.email) row.email = r.email; if (r.site) row.site = r.site;
+  if (r.tels.length) { row.tels = telsText(tels); row.tel = tels[0].n; }
+  if (r.client) row.notes = (f.notes ? f.notes + '\n' : '') + 'N° client : ' + r.client;
+  commit(put('Fournisseurs', row));
+  V.infosOff = true; saveVerif(); toast('Fiche de ' + f.nom + ' complétée', 'Fournisseurs › ' + f.nom); render(false);
+};
+A.vInfosNo = function () { VERIF.infosOff = true; saveVerif(); render(false); };
 A.vFourPick = function () {
   var M = D();
   openSheet('<h3>Quel fournisseur ?</h3>' + M.foursActifs.map(function (f) { return '<button class="menu-item" data-a="vFourSet" data-id="' + f.id + '">' + ic('truck') + esc(f.nom) + '</button>'; }).join(''));

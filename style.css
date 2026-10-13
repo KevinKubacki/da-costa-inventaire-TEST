@@ -581,3 +581,6 @@ body.dragging::after{content:'Lâche les factures ici : l\'appli les lit';positi
 .pdf-card .btn-row .btn{font-size:15px}
 body.rail .ds-table th:nth-child(2),body.rail .ds-table td:nth-child(2){display:none}
 body.rail .ds-panel{flex-basis:300px}
+/* V3.1 : plusieurs téléphones par fournisseur, infos lues sur la facture */
+.tel-row{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) 44px;gap:8px;align-items:center;margin-bottom:8px}
+.vinfo-list{margin:6px 0 10px 18px;padding:0;font-size:15px;line-height:1.5}

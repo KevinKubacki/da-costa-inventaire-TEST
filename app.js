@@ -1221,7 +1221,20 @@ SCREENS.fours = function (p) {
 var FQ_T = null;
 I.fq = function (v) { VIEW.p.q = v; saveView(); clearTimeout(FQ_T); FQ_T = setTimeout(function () { var a = document.activeElement; render(false); var inp = document.querySelector('[data-i="fq"]'); if (inp && a && a.dataset && a.dataset.i === 'fq') { inp.focus(); inp.setSelectionRange(v.length, v.length); } }, 250); };
 A.openFour = function (d) { if (D().four[d.id]) go('four', { id: d.id }); };
-A.newFour = function () { go('fourEdit', { f: { isNew: true, nom: '', contact: '', tel: '', email: '', adresse: '', notes: '' } }); };
+A.newFour = function () { go('fourEdit', { f: { isNew: true, nom: '', contact: '', telsL: [{ l: 'Agence', n: '' }], email: '', site: '', adresse: '', notes: '' } }); };
+/** Téléphones d'un fournisseur (V3.1) : colonne « tels » = une ligne « libellé : numéro » par téléphone ; « tel » = le 1er (bouton Appeler). */
+function fourTels(f) {
+  var out = [];
+  String(f.tels || '').split('\n').forEach(function (line) {
+    line = line.trim(); if (!line) return;
+    var i = line.lastIndexOf(':');
+    if (i > 0 && /\d/.test(line.slice(i + 1))) out.push({ l: line.slice(0, i).trim(), n: line.slice(i + 1).trim() }); else out.push({ l: '', n: line });
+  });
+  if (!out.length && f.tel) out.push({ l: 'Téléphone', n: f.tel });
+  return out;
+}
+function telsText(list) { return list.map(function (t) { return (t.l ? t.l + ' : ' : '') + t.n; }).join('\n'); }
+function telDigits(n) { return String(n || '').replace(/\D/g, '').replace(/^33/, '0'); }
 SCREENS.four = function (p) {
   var M = D(), f = M.four[p.id], patron = isPatron();
   if (!f) return SCREENS.fours({});
@@ -1238,15 +1251,21 @@ SCREENS.four = function (p) {
     '<div class="scroll nonav">' + (f.logo ? '<div class="four-logo"><img src="' + esc(f.logo) + '" alt="Logo ' + esc(f.nom) + '"></div>' : '') +
     // barre d'actions : reste collée sous l'en-tête quand on fait défiler les produits
     '<div class="act-stick" data-under-head><div class="contact-actions four-acts">' +
-    '<a href="' + (f.tel ? 'tel:' + esc(f.tel.replace(/\s/g, '')) : '#') + '" class="ca-call ' + (f.tel ? '' : 'off') + '">' + ic('phone') + 'Appeler</a>' +
+    (fourTels(f).length > 1 ? '<button data-a="fourCall" class="ca-call">' + ic('phone') + 'Appeler</button>' :
+      '<a href="' + (f.tel ? 'tel:' + esc(f.tel.replace(/\s/g, '')) : '#') + '" class="ca-call ' + (f.tel ? '' : 'off') + '">' + ic('phone') + 'Appeler</a>') +
     '<button data-a="fourMsg" class="ca-msg ' + (f.tel ? '' : 'off') + '">' + ic('chat') + 'Message</button>' +
     '<a href="' + (f.email ? 'mailto:' + esc(f.email) : '#') + '" class="ca-mail ' + (f.email ? '' : 'off') + '">' + ic('mail') + 'Mail</a>' +
     '<a href="' + (addr || '#') + '" target="_blank" rel="noopener" class="ca-map ' + (addr ? '' : 'off') + '">' + ic('map') + 'Itinéraire</a></div></div>' +
-    '<div class="card">' + kvLine('Contact', f.contact) + kvLine('Téléphone', f.tel) + kvLine('Mail', f.email) + kvLine('Adresse', f.adresse) + kvLine('Notes', f.notes) +
+    '<div class="card">' + kvLine('Contact', f.contact) + fourTels(f).map(function (t) { return '<div class="kv"><span>' + esc(t.l || 'Téléphone') + '</span><a href="tel:' + esc(t.n.replace(/\s/g, '')) + '" style="font-weight:700">' + esc(t.n) + '</a></div>'; }).join('') +
+    kvLine('Mail', f.email) + (f.site ? '<div class="kv"><span>Site</span><a href="' + esc(/^https?:/i.test(f.site) ? f.site : 'https://' + f.site) + '" target="_blank" rel="noopener">' + esc(f.site) + '</a></div>' : '') + kvLine('Adresse', f.adresse) + kvLine('Notes', f.notes) +
     (!f.contact && !f.tel && !f.email && !f.adresse ? '<div class="empty" style="padding:12px">Coordonnées à compléter' + (patron ? ' (crayon en haut)' : '') + '</div>' : '') + '</div>' +
     '<div class="sec-title"><span>Produits achetés ici (' + rows.length + ')</span></div>' + searchBox('fpq', 'Chercher un produit chez ' + f.nom + '…', p.q) +
     '<div class="card" style="padding-top:4px;padding-bottom:4px;margin-top:10px" id="fplist">' + fourProds(rows, patron) + '</div></div></div>';
   return html;
+};
+A.fourCall = function () {
+  var f = D().four[VIEW.p.id]; if (!f) return;
+  openSheet('<h3>Appeler ' + esc(f.nom) + '</h3>' + fourTels(f).map(function (t) { return '<a class="menu-item" href="tel:' + esc(t.n.replace(/\s/g, '')) + '">' + ic('phone') + '<span><b>' + esc(t.n) + '</b>' + (t.l ? ' · ' + esc(t.l) : '') + '</span></a>'; }).join(''));
 };
 A.fourMsg = function () {
   var f = D().four[VIEW.p.id]; if (!f) return;
@@ -1266,7 +1285,7 @@ var FPQ_T = null;
 I.fpq = function (v) { VIEW.p.q = v; saveView(); clearTimeout(FPQ_T); FPQ_T = setTimeout(function () { var a = document.activeElement; var y = window.scrollY; render(false); var inp = document.querySelector('[data-i="fpq"]'); if (inp && a && a.dataset && a.dataset.i === 'fpq') { inp.focus(); inp.setSelectionRange(v.length, v.length); } window.scrollTo(0, y); }, 250); };
 function kvLine(k, v) { return v ? '<div class="kv"><span>' + k + '</span><span style="white-space:pre-line;max-width:65%">' + esc(v) + '</span></div>' : ''; }
 A.delLogo = function () { VIEW.p.f.logo = ''; VIEW.p.f.logoDel = true; saveView(); render(false); };
-A.editFour = function () { var f = D().four[VIEW.p.id]; go('fourEdit', { f: { isNew: false, id: f.id, logo: f.logo || '', nom: f.nom, contact: f.contact || '', tel: f.tel || '', email: f.email || '', adresse: f.adresse || '', notes: f.notes || '' } }); };
+A.editFour = function () { var f = D().four[VIEW.p.id]; var t = fourTels(f); go('fourEdit', { f: { isNew: false, id: f.id, logo: f.logo || '', nom: f.nom, contact: f.contact || '', telsL: t.length ? t : [{ l: 'Agence', n: '' }], email: f.email || '', site: f.site || '', adresse: f.adresse || '', notes: f.notes || '' } }); };
 SCREENS.fourEdit = function (p) {
   var f = p.f;
   var fld = function (k, label, type, ph, mode) {
@@ -1274,8 +1293,14 @@ SCREENS.fourEdit = function (p) {
       : '<input id="fe_' + k + '" class="inp" ' + (type ? 'type="' + type + '" ' : '') + (mode ? 'inputmode="' + mode + '" ' : '') + 'autocomplete="off" data-i="fef" data-k="' + k + '" placeholder="' + esc(ph || '') + '" value="' + esc(f[k]) + '">') + '</div>';
   };
   return '<div class="screen">' + head({ title: f.isNew ? 'Nouveau fournisseur' : 'Modifier' }) + '<div class="scroll nonav">' +
+    (f.fromVerif ? '<div class="hint" style="margin-top:0"><b>Fiche pré-remplie avec la facture.</b> Vérifie, complète le contact si tu veux, puis « Ajouter ».</div>' : '') +
     fld('nom', 'Nom', '', 'ex. Réseau Pro Montargis') + fld('contact', 'Contact <span class="help">(commercial, vendeur…)</span>', '', 'ex. Sébastien') +
-    fld('tel', 'Téléphone', 'tel', 'ex. 02 38 00 00 00', 'tel') + fld('email', 'Mail', 'email', 'ex. agence@fournisseur.fr', 'email') +
+    '<div class="field"><span class="flabel">Téléphones <span class="help">(agence, portables des commerciaux…)</span></span>' + (f.telsL || []).map(function (t, j) {
+      return '<div class="tel-row"><input class="inp" aria-label="Qui (téléphone ' + (j + 1) + ')" autocomplete="off" data-i="fetel" data-j="' + j + '" data-k="l" placeholder="ex. Agence, Marc (commercial)" value="' + esc(t.l) + '">' +
+        '<input class="inp" type="tel" inputmode="tel" aria-label="Numéro (téléphone ' + (j + 1) + ')" autocomplete="off" data-i="fetel" data-j="' + j + '" data-k="n" placeholder="02 38 00 00 00" value="' + esc(t.n) + '">' +
+        '<button type="button" class="icon-btn" data-a="feTelDel" data-j="' + j + '" aria-label="Retirer ce téléphone">' + ic('x') + '</button></div>';
+    }).join('') + '<button type="button" class="link" data-a="feTelAdd" style="margin-top:4px">+ Ajouter un téléphone</button></div>' +
+    fld('email', 'Mail', 'email', 'ex. agence@fournisseur.fr', 'email') + fld('site', 'Site internet', '', 'ex. www.fournisseur.fr') +
     fld('adresse', 'Adresse', 'textarea', 'ex. ZA des Champs, 45200 Amilly') + fld('notes', 'Notes', 'textarea', 'ex. n° de compte client, horaires…') +
     (!f.isNew && f.logo ? '<div class="field"><label>Logo <span class="help">(repris d\'une facture)</span></label><div class="four-logo" style="margin:0 0 8px">' + '<img src="' + esc(f.logo) + '" alt="Logo"></div>' +
       '<button class="btn light" data-a="delLogo" style="margin-bottom:16px">' + ic('x') + 'Retirer le logo</button></div>' : '') +
@@ -1283,14 +1308,19 @@ SCREENS.fourEdit = function (p) {
     '</div><div class="bottom-bar"><button class="btn green" data-a="saveFour">' + (f.isNew ? 'Ajouter' : 'Enregistrer') + '</button></div></div>';
 };
 I.fef = function (v, el) { VIEW.p.f[el.dataset.k] = v; saveView(); };
+I.fetel = function (v, el) { var t = VIEW.p.f.telsL[+el.dataset.j]; if (t) { t[el.dataset.k] = v; saveView(); } };
+A.feTelAdd = function () { VIEW.p.f.telsL = (VIEW.p.f.telsL || []).concat([{ l: '', n: '' }]); saveView(); render(false); };
+A.feTelDel = function (d) { VIEW.p.f.telsL.splice(+d.j, 1); saveView(); render(false); };
 A.saveFour = function () {
   var f = VIEW.p.f, nom = (f.nom || '').trim();
   if (!nom) { toast('Il manque le nom'); return; }
   var id = f.isNew ? uid('f') : f.id;
-  var row = { id: id, nom: nom, contact: f.contact.trim(), tel: f.tel.trim(), email: f.email.trim(), adresse: f.adresse.trim(), notes: f.notes.trim(), actif: '1' };
+  var tels = (f.telsL || []).map(function (t) { return { l: String(t.l || '').trim(), n: String(t.n || '').trim() }; }).filter(function (t) { return t.n; });
+  var row = { id: id, nom: nom, contact: (f.contact || '').trim(), tel: tels.length ? tels[0].n : '', tels: telsText(tels), email: (f.email || '').trim(), site: (f.site || '').trim(), adresse: (f.adresse || '').trim(), notes: (f.notes || '').trim(), actif: '1' };
   if (f.logoDel) row.logo = '';
   commit(put('Fournisseurs', row));
   toast(f.isNew ? 'Fournisseur ajouté' : 'Enregistré', nom);
+  if (f.fromVerif && window.VERIF) { VERIF.four = id; VERIF.infosOff = true; rematchAlias(); saveVerif(); go('verif', {}, { replace: true }); return; }
   if (f.isNew) go('four', { id: id }, { replace: true }); else back();
 };
 A.delFour = function () {
