@@ -609,3 +609,9 @@ body.wide .pf-under{padding:0 32px}
 .vxq.cmd{background:var(--orange-bg);color:#7A3D00}
 .vx-replay{margin-top:12px;background:rgba(255,255,255,.14);color:#fff;border:1px solid rgba(255,255,255,.3)}
 .vcard.vx-info{display:flex;flex-direction:column;align-items:stretch}
+/* V3.3 : question à la voix → actions directes sur le produit */
+.vxi-acts{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.vxi-acts button{height:46px;border-radius:12px;border:0;font:inherit;font-weight:700;font-size:14px;color:#fff;display:flex;align-items:center;justify-content:center;gap:4px;padding:0 4px}
+.vxi-acts .out{background:var(--red)}.vxi-acts .in{background:var(--green)}.vxi-acts .adj{background:var(--navy)}.vxi-acts .cmd{background:#B45309}
+.vxi-acts svg.i{width:16px;height:16px}
+.vxi-chg{align-self:flex-start;font-size:14px;margin-top:2px}

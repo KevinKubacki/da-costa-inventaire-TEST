@@ -125,11 +125,11 @@ function prodPanel(id) {
     return '<div class="dp-row"><span>' + esc([fday(m.date), userName(m.qui), m.lieu || (m.type === 'depart' ? 'stock de départ' : '')].filter(Boolean).join(' · ')) + '</span>' + mvBadge(m) + '</div>';
   }).join('') : '<div class="dp-row mut">Aucun mouvement</div>');
   var ic0 = M.cmd[p.id];
-  h += '<button class="cmd-add ' + (ic0 ? 'on' : '') + '" style="margin-top:12px" data-a="panelCmd" data-id="' + p.id + '">' + ic('bell') + '<span class="grow">' + (ic0 ? 'Dans la commande : <b>' + fq(num(ic0.qte)) + '</b> · +1' : 'Ajouter à la commande') + '</span><b>+1</b></button>';
+  h += '<button class="cmd-add ' + (ic0 ? 'on' : '') + '" style="margin-top:12px" data-a="panelCmd" data-id="' + p.id + '">' + ic('bell') + '<span class="grow">' + (ic0 ? 'Dans la commande : <b>' + fq(num(ic0.qte)) + '</b> · modifier' : 'Ajouter à la commande') + '</span></button>';
   h += '<button class="btn light" style="margin-top:14px" data-a="openProd" data-id="' + p.id + '">Ouvrir la fiche complète' + (patron ? ' (modifier, prix, seuil)' : '') + '</button>';
   return h;
 }
-A.panelCmd = function (d) { commit(cmdAdd(d.id, 1)); toast('Ajouté à la commande', D().prod[d.id].nom); render(false); };
+A.panelCmd = function (d) { cmdDemander(d.id); };
 A.selProd = function (d) { VIEW.p.sel = d.id; saveView(); render(false); };
 A.stockSort = function (d) { VIEW.p.sort = d.k === 'nom' ? '' : d.k; saveView(); render(false); };
 A.panelMv = function (d) { go('mvt', { mode: d.m, pid: d.id, n: 1, lieu: '', from: 'prod' }); };

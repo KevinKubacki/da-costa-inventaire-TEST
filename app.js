@@ -587,8 +587,8 @@ SCREENS.prod = function (p) {
     '<div class="card pf-card"><div class="kv"><span style="display:flex;flex-direction:column"><span style="color:var(--ink);font-weight:600">Seuil d\'alerte</span><span style="font-size:13px">' +
     (seuil > 0 ? 'Alerte quand il en reste ' + fq(seuil) + ' ou moins' : 'Pas d\'alerte pour ce produit') + '</span></span>' +
     (patron ? stepper('seuil', 'seuil', seuil, 'Saisir le seuil') : '<b>' + fq(seuil) + '</b>') + '</div>' +
-    '<button class="cmd-add ' + (inCmd ? 'on' : '') + '" data-a="prodCmd">' + ic('bell') + '<span class="grow">' + (inCmd ? 'Dans la commande : <b>' + fq(num(inCmd.qte)) + '</b> · toucher pour +1' : 'Ajouter à la commande') + '</span>' +
-    (inCmd ? '<u data-a="cmdOut" data-id="' + pr.id + '">retirer</u>' : '<b>+1</b>') + '</button></div></div></div>' +
+    '<button class="cmd-add ' + (inCmd ? 'on' : '') + '" data-a="prodCmd">' + ic('bell') + '<span class="grow">' + (inCmd ? 'Dans la commande : <b>' + fq(num(inCmd.qte)) + '</b> · modifier' : 'Ajouter à la commande') + '</span>' +
+    (inCmd ? '<u data-a="cmdOut" data-id="' + pr.id + '">retirer</u>' : '') + '</button></div></div></div>' +
     '<div class="scroll" style="padding-top:0"><div class="card">' +
     (pr.ref ? '<div class="kv"><span>Référence</span><span>' + esc(pr.ref) + '</span></div>' : '') +
     (pr.unite ? '<div class="kv"><span>Compté en</span><span>' + esc(pr.unite) + '</span></div>' : '') +
@@ -610,7 +610,16 @@ SCREENS.prod = function (p) {
   return html;
 };
 A.prodMv = function (d) { go('mvt', { mode: d.m, pid: VIEW.p.id, n: 1, lieu: '', from: 'prod' }); };
-A.prodCmd = function () { var p = D().prod[VIEW.p.id]; if (!p) return; commit(cmdAdd(p.id, 1)); toast('Ajouté à la commande', p.nom + ' · ' + fq(num(D().cmd[p.id] ? D().cmd[p.id].qte : 1))); render(false); };
+A.prodCmd = function () { cmdDemander(VIEW.p.id); };
+/** Combien en commander ? (déjà dans la commande : on corrige la quantité) */
+function cmdDemander(pid) {
+  var p = D().prod[pid], c = D().cmd[pid]; if (!p) return;
+  askNumber({ title: c ? 'Quantité à commander' : 'Ajouter à la commande', text: p.nom + (c ? ' · déjà ' + fq(num(c.qte)) + ' dans la commande' : ''), value: c ? num(c.qte) : defQty(p) }).then(function (n) {
+    if (n === null || n === undefined || !(n >= 0)) return;
+    commit(put('Commande', { id: 'c_' + pid, produit: pid, qte: String(round3(n)), qui: ME, date: c ? c.date : nowIso() }));
+    toast(n > 0 ? 'Ajouté en commande' : 'Retiré de la commande', p.nom + (n > 0 ? ' · ' + fq(n) : '')); render(false);
+  });
+}
 A.seuil = function (d) {
   var pr = D().prod[VIEW.p.id]; if (!pr) return;
   commit(put('Produits', { id: pr.id, seuil: String(Math.max(0, num(pr.seuil) + num(d.d))) })); render(false);
