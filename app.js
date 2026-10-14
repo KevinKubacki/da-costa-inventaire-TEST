@@ -225,11 +225,45 @@ function openSheet(html, opt) {
   ov.innerHTML = '<div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>' + html + '</div>';
   ov.addEventListener('click', function (e) { if (e.target === ov) closeSheet(); });
   document.body.appendChild(ov);
+  glisserPourFermer(ov.querySelector('.sheet'));
   SHEET = { el: ov, onClose: opt && opt.onClose };
   var tst = document.querySelector('.toast'); if (tst) tst.classList.add('top');   // ne pas cacher les boutons de la fenêtre
   try { history.pushState({ r: VIEW.r, p: VIEW.p, sheet: 1 }, ''); } catch (e) {}
   var f = ov.querySelector('[autofocus]'); if (f) setTimeout(function () { f.focus(); if (f.select) f.select(); }, 60);
   return ov;
+}
+/** V3.6 : la fenêtre du bas se ferme en la faisant glisser vers le bas (depuis la poignée, ou n'importe où quand son contenu est en haut). */
+function glisserPourFermer(sh) {
+  if (!sh || wide()) return;
+  var y0 = 0, dy = 0, t0 = 0, actif = false, suivi = false;
+  sh.addEventListener('touchstart', function (e) {
+    if (e.touches.length !== 1) return;
+    var surPoignee = e.target.closest && e.target.closest('.grab');
+    if (!surPoignee && sh.scrollTop > 0) return;                       // il fait défiler la liste : on ne touche à rien
+    if (!surPoignee && e.target.closest && e.target.closest('input,textarea,select')) return;
+    y0 = e.touches[0].clientY; dy = 0; t0 = Date.now(); actif = true; suivi = false;
+  }, { passive: true });
+  sh.addEventListener('touchmove', function (e) {
+    if (!actif) return;
+    dy = e.touches[0].clientY - y0;
+    if (!suivi && dy < 6) { if (dy < -6) actif = false; return; }      // vers le haut : c'est un défilement normal
+    suivi = true;
+    if (e.cancelable) e.preventDefault();
+    sh.style.transition = 'none'; sh.style.transform = 'translateY(' + Math.max(0, dy) + 'px)';
+    sh.parentNode.style.background = 'rgba(16,18,40,' + (0.45 * Math.max(0, 1 - dy / sh.offsetHeight)).toFixed(3) + ')';
+  }, { passive: false });
+  var fin = function () {
+    if (!actif) return; actif = false;
+    if (!suivi) return;
+    var vite = dy / Math.max(1, Date.now() - t0) > 0.6;
+    if (dy > Math.min(140, sh.offsetHeight * 0.3) || (vite && dy > 40)) {
+      sh.style.transition = 'transform .18s ease-in'; sh.style.transform = 'translateY(100%)';
+      setTimeout(function () { closeSheet(); }, 170);
+    } else {
+      sh.style.transition = 'transform .2s ease-out'; sh.style.transform = ''; sh.parentNode.style.background = '';
+    }
+  };
+  sh.addEventListener('touchend', fin); sh.addEventListener('touchcancel', fin);
 }
 function closeSheetDom() {
   if (!SHEET) return;

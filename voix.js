@@ -162,6 +162,12 @@ function liveStopAll() {
   LIVE.srcs.forEach(function (s) { try { s.onended = null; s.stop(); } catch (e) {} }); LIVE.srcs = [];
   if (LIVE.cur) { try { LIVE.cur.close(); } catch (e) {} LIVE.cur = null; }
 }
+/** Coupe en phrases (sur . ! ?), en gardant les morceaux trop courts avec la phrase d'avant. */
+function phrasesVoix(t) {
+  var p = String(t || '').match(/[^.!?]+[.!?]*\s*/g) || [String(t || '')], out = [];
+  p.forEach(function (x) { x = x.trim(); if (!x) return; if (out.length && x.length < 8) out[out.length - 1] += ' ' + x; else out.push(x); });
+  return out.length ? out : [String(t || '')];
+}
 /** Dit le texte par l'API Live : le son est joué AU FUR ET À MESURE qu'il arrive. Renvoie le son complet (pour Réécouter). */
 function speakLive(text, voice, tok, t0) {
   return livePrepare(voice).then(function (ws) {
@@ -172,7 +178,9 @@ function speakLive(text, voice, tok, t0) {
     var next = 0, started = false, pcm = [], rate = 24000;
     return new Promise(function (res, rej) {
       var first = setTimeout(function () { if (!started) { try { ws.close(); } catch (e) {} rej(new Error('lent')); } }, 7000);
+      var fini = false;
       var finish = function () {
+        if (fini) return; fini = true; clearTimeout(garde);
         clearTimeout(first);
         var wait = Math.max(0, (next - ctx.currentTime) * 1000) + 60;
         setTimeout(function () {
@@ -201,11 +209,22 @@ function speakLive(text, voice, tok, t0) {
             if (next < ctx.currentTime) next = ctx.currentTime + 0.02;
             src.start(next); next += b.duration; LIVE.srcs.push(src);
           });
-          if (sc && (sc.turnComplete || sc.generationComplete)) finish();
+          if (sc && sc.turnComplete) suite();
         });
       };
       ws.onclose = function () { if (LIVE.cur === ws) { LIVE.cur = null; if (started) finish(); else rej(new Error('live-close')); } };
-      ws.send(JSON.stringify({ realtimeInput: { text: text } }));
+      // V3.6 : une phrase à la fois (la voix en direct s'arrêtait parfois au 1er point) ; la suivante est demandée
+      // pendant que la précédente se joue encore → pas de blanc. Une phrase revenue sans son est redemandée une fois.
+      var bouts = phrasesVoix(text), k = -1, essai = 0, recu = 0, garde = null;
+      var suite = function () {
+        clearTimeout(garde);
+        if (k >= 0 && pcm.length === recu && essai < 1) { essai++; } else { k++; essai = 0; }
+        recu = pcm.length;
+        if (k >= bouts.length || tok !== AUD.tok) { finish(); return; }
+        garde = setTimeout(function () { if (tok === AUD.tok) suite(); }, 9000);
+        try { ws.send(JSON.stringify({ realtimeInput: { text: bouts[k] } })); } catch (e) { finish(); }
+      };
+      suite();
     });
   });
 }
@@ -583,17 +602,19 @@ function composeReponse(V) {
     if (l.op === 'commander') return q + ' ' + nom + ' en commande';
     var m = mvById(l.mid);
     return (l.op === 'supprimer' ? 'je supprime ' : 'je refais ') + (m ? ({ entree: 'l\'entrée', sortie: 'la sortie', ajust: 'la correction' }[m.type] || 'le mouvement') + ' de ' + fq(Math.abs(num(m.delta))) + ' ' + nom : 'ce mouvement');
-  }).join(', ').replace(/^./, function (c) { return c.toUpperCase(); }) + '.');
-  // 2) réponses aux questions
-  info.forEach(function (l) { var st = M.stock[l.pid] || 0; out.push(st > 0 ? 'Il te reste ' + fq(st) + ' ' + vNom(l) + '.' : 'Tu n\'as plus de ' + vNom(l) + '.'); });
+  }).reduce(function (acc, x, i, all) { return acc + (i ? (i === all.length - 1 ? ' et ' : ', ') : '') + x; }, '').replace(/^./, function (c) { return c.toUpperCase(); }) + '.');
+  // 2) réponses aux questions (« Il te reste 2 bandes de solin et 3 bandes de rive. Tu n'as plus de volige 18. »)
+  var oui = info.filter(function (l) { return (M.stock[l.pid] || 0) > 0; }), non = info.filter(function (l) { return !((M.stock[l.pid] || 0) > 0); });
+  if (oui.length) out.push('Il te reste ' + vEt(oui.map(function (l) { return fq(M.stock[l.pid]) + ' ' + vNom(l); })) + '.');
+  if (non.length) out.push('Tu n\'as plus de ' + non.map(function (l) { return vNom(l); }).reduce(function (acc, x, i, all) { return acc + (i ? (i === all.length - 1 ? ' ni de ' : ', de ') : '') + x; }, '') + '.');
   // 3) à choisir
   if (amb.length === 1) {
     var a1 = amb[0], f = vFeminin(a1.dit), n1 = a1.nbTrouves || a1.cands.length, qui = f ? 'Laquelle' : 'Lequel';
     var verbe = { info: '', sortie: ' tu sors', entree: ' tu rentres', compte: ' je corrige', commander: ' je commande' }[a1.op] || '';
     if (a1.cands.length <= 4) out.push('Pour ' + vLes(vPluriel(a1.dit)) + ', j\'ai trouvé ' + n1 + ' produits : ' + vListe(vLabels(a1.cands, a1.dit)) + '. ' + qui + verbe + ' ?');
     else out.push('Pour ' + vLes(vPluriel(a1.dit)) + ', j\'ai trouvé ' + n1 + ' produits : choisis ' + (f ? 'la bonne' : 'le bon') + ' à l\'écran.');
-  } else if (amb.length > 1) {
-    out.push(amb.map(function (l, i) { return (i ? 'pour ' : 'Pour ') + vLes(vPluriel(l.dit)) + ', ' + (i ? '' : 'j\'ai trouvé ') + (l.nbTrouves || l.cands.length) + (i ? '' : ' produits'); }).join(', et ').replace(/, et (?=[^,]*$)/, ', et ') + '. Choisis le bon à chaque fois' +
+  } else if (amb.length > 1) {                              // « J'ai trouvé 3 bandes de solin et 4 crochets de gouttière. »
+    out.push('J\'ai trouvé ' + vEt(amb.map(function (l) { return (l.nbTrouves || l.cands.length) + ' ' + vPluriel(l.dit); })) + '. Choisis le bon à chaque fois' +
       (amb.some(function (l) { return l.op === 'info'; }) ? ', et dis-moi ce que tu veux en faire.' : '.'));
   }
   chk.forEach(function (l) { out.push(l.mvc ? 'Quel mouvement ? Choisis dans la liste.' : 'Pour ' + (l.dit || 'ce produit') + ', je pense à ' + M.prod[l.cands[0]].nom.toLowerCase() + '. C\'est bien ça ?'); });
