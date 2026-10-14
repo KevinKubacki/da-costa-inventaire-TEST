@@ -45,6 +45,7 @@ function phraseOk(avancer) {
   if (avancer) try { localStorage.setItem(NS + 'okTour', String((i + 1) % PHRASES_OK.length)); } catch (e) {}
   return PHRASES_OK[i];
 }
+function prechargerOk() { PHRASES_OK.forEach(function (t) { cachedVoice(prononce(t), voiceName()); }); }
 var PHRASE_REPETE = 'Je n\'ai pas bien compris, tu peux répéter ?';
 var VCACHE = 'stock-voix:' + (typeof NS !== 'undefined' ? NS : '');
 function phoneCacheGet(key) {
@@ -276,7 +277,7 @@ function showTiming() {
   var last = null;
   window.addEventListener('popstate', function () { stopSpeak(); });
   var orig = window.render;
-  if (typeof orig === 'function') window.render = function () { if (last !== VIEW.r) { if (last !== null) stopSpeak(); last = VIEW.r; } return orig.apply(this, arguments); };
+  if (typeof orig === 'function') window.render = function () { if (last !== VIEW.r) { if (last !== null && !AUD.garde) stopSpeak(); AUD.garde = false; last = VIEW.r; } return orig.apply(this, arguments); };
 })();
 
 /* ================= enregistrement du micro (avec le halo) ================= */
@@ -425,7 +426,7 @@ A.vxToggle = function () {
     saveVox(); VX.st = 'idle'; VX.append = false;
     go('voixVerif', {}, { replace: true });
     speak(VOX.reponse);
-    cachedVoice(phraseOk(), voiceName());                         // la confirmation suivante, chargée si déjà connue
+    prechargerOk();                                               // les confirmations, prêtes en mémoire
   }).catch(function (e) {
     VX.st = 'err';
     VX.err = e.code === 'NOKEY' ? 'La clé Gemini n\'est pas installée dans le script.' : e.code === 'QUOTA' ? 'Trop de demandes à Gemini pour le moment : réessaie dans une minute.' : (e.message || 'Problème de connexion.');
@@ -478,79 +479,136 @@ function vMatch(dit) {
   var T = vTokens(dit); if (!T.length) return [];
   return D().prods.filter(function (p) { var pts = vTokens(p.nom); return T.every(function (t) { return vTokMatch(t, pts); }); });
 }
-/** Après Gemini, l'appli vérifie elle-même : un seul produit → sûr ; plusieurs → elle demande lequel (jamais au hasard). */
+/** Nombres dits en lettres (« quatre-vingt », « vingt-cinq », « cent quatre-vingt-quinze ») → chiffres, pour comparer avec les noms. */
+var NB_FR = { zero: 0, un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10, onze: 11, douze: 12, treize: 13, quatorze: 14, quinze: 15, seize: 16,
+  vingt: 20, vingts: 20, trente: 30, quarante: 40, cinquante: 50, soixante: 60, cent: 100, cents: 100, mille: 1000 };
+function chiffresFr(t) {
+  var out = [], cur = -1, tot = 0, prev = 0;
+  var fin = function () { if (cur >= 0 || tot) out.push(String(tot + Math.max(cur, 0))); cur = -1; tot = 0; prev = 0; };
+  norm(t || '').replace(/[^a-z0-9,]+/g, ' ').split(' ').forEach(function (w) {
+    if (w === 'et' && cur >= 0) return;
+    var n = NB_FR[w];
+    if (n === undefined) { fin(); out.push(w); return; }
+    if (cur < 0) cur = 0;
+    if (n === 100) cur = (cur || 1) * 100;
+    else if (n === 1000) { tot += (cur || 1) * 1000; cur = 0; }
+    else if (n === 20 && prev === 4) cur += 76;                     // quatre-vingt
+    else cur += n;
+    prev = n;
+  });
+  fin();
+  return out.join(' ');
+}
+/** Les mots du produit qu'il a VRAIMENT prononcés : Gemini recopie parfois le nom complet du catalogue dans « dit »
+    (« bande de solin 2 m zinc quartz » alors qu'il a dit « bande de solin ») → on ne garde que ce qu'on retrouve dans la phrase entendue. */
+function vMotsDits(dit, transcription) {
+  var T = vTokens(dit);
+  if (!transcription) return T;
+  var tr = vTokens(chiffresFr(transcription));
+  var k = T.filter(function (t) { return /^\d/.test(t) ? tr.indexOf(t) >= 0 || tr.indexOf('o' + t) >= 0 || tr.some(function (x) { return x.split('x').indexOf(t) >= 0; }) : vTokMatch(t, tr); });
+  return k.length ? k : T;
+}
+function vMatchT(T) {
+  if (!T.length) return [];
+  return D().prods.filter(function (p) { var pts = vTokens(p.nom); return T.every(function (t) { return vTokMatch(t, pts); }); });
+}
+/** Après Gemini, l'appli vérifie elle-même, TOUJOURS de la même façon :
+    tous les produits du stock qui portent les mots qu'il a dits sont proposés ; un seul → sûr ; plusieurs → elle demande lequel (jamais au hasard).
+    Le produit choisi par Gemini est toujours ajouté aux choix s'il n'y est pas. */
 function preciser(V) {
   var M = D();
   V.lignes.forEach(function (L) {
-    if (L.op === 'supprimer' || L.op === 'dupliquer' || L.statut === 'create') return;
-    var m = vMatch(L.dit), T = vTokens(L.dit);
-    // V3.3 : Gemini sûr de lui sur un produit que les mots ne retrouvent pas (« rouleau de plomb de 30 » → « BANDE PLOMB … 0,30ML ») :
-    // on ne tranche pas en silence, on le propose AVEC les autres et on demande.
-    if (m.length && L.gpid && L.gconf >= 0.8 && M.prod[L.gpid] && m.indexOf(M.prod[L.gpid]) < 0) m = m.concat([M.prod[L.gpid]]);
-    if (m.length > 1) {                       // un produit qui porte EXACTEMENT ces mots (« volige 14 ») passe devant les autres
-      var exact = m.filter(function (p) { var pt = vTokens(p.nom); return pt.length === T.length && pt.every(function (x) { return vTokMatch(x, T) || T.some(function (t) { return vTokMatch(t, [x]); }); }); });
-      if (exact.length === 1) m = exact;
+    if (L.op === 'supprimer' || L.op === 'dupliquer' || L.statut === 'create' || L.choisi) return;
+    var T = vMotsDits(L.dit, V.transcription), m = vMatchT(T), g = L.gpid && M.prod[L.gpid] ? L.gpid : '';
+    if (!m.length && g) {                                     // un mot dit n'est dans aucun nom (« bande de solin grise ») : on garde ceux du produit de Gemini
+      var gt = vTokens(M.prod[g].nom), Tg = T.filter(function (t) { return vTokMatch(t, gt); });
+      if (Tg.length) m = vMatchT(Tg);
     }
-    if (m.length === 1) { L.pid = m[0].id; L.statut = 'ok'; L.ambigu = false; return; }
-    if (m.length >= 2) {
-      var ids = m.map(function (p) { return p.id; });
-      var g = L.pid || L.gpid;
-      if (g && ids.indexOf(g) > 0) { ids.splice(ids.indexOf(g), 1); ids.unshift(g); }
-      L.pid = ''; L.statut = 'check'; L.cands = ids.slice(0, 8); L.allCands = L.cands.slice(); L.ambigu = true; L.source = '';
-    }
+    if (!m.length) return;                                    // rien dans le stock : on laisse Gemini (nouveau produit, ou son choix)
+    if (g && m.indexOf(M.prod[g]) < 0 && (L.gconf >= 0.5 || m.length > 1)) m = m.concat([M.prod[g]]);
+    if (m.length === 1) { L.pid = m[0].id; L.statut = 'ok'; L.ambigu = false; L.cands = []; return; }
+    // ordre : le nom qui porte exactement ces mots, puis le choix de Gemini, puis les plus courts (les plus « simples »)
+    var exact = function (p) { var pt = vTokens(p.nom); return pt.length === T.length && pt.every(function (x) { return T.some(function (t) { return vTokMatch(t, [x]); }); }); };
+    m.sort(function (a, b) { return (exact(b) - exact(a)) || ((b.id === g) - (a.id === g)) || (vTokens(a.nom).length - vTokens(b.nom).length) || (a.nom < b.nom ? -1 : 1); });
+    var ids = m.map(function (p) { return p.id; });
+    var mots = String(L.dit || '').split(/\s+/), garde = mots.map(function (w) { var t = vTokens(w)[0]; return t ? (T.indexOf(t) >= 0 ? 1 : 0) : -1; });
+    var i0 = garde.indexOf(1), i1 = garde.lastIndexOf(1);
+    if (i0 >= 0) L.dit = mots.slice(i0, i1 + 1).filter(function (w, k) { return garde[i0 + k] !== 0; }).join(' ');   // ce qu'il a vraiment dit (« bande de solin »)
+    L.pid = ''; L.statut = 'check'; L.cands = ids.slice(0, 8); L.allCands = L.cands.slice(); L.ambigu = true; L.source = ''; L.nbTrouves = ids.length;
   });
 }
 /** Ce qui distingue chaque produit des autres (« Ø25 0,52 », « anglaise galva Ø65 1×10 »). */
 function vLabels(ids, dit) {
   var M = D(), toks = ids.map(function (id) { return vTokens(M.prod[id].nom); }), T = vTokens(dit || '');
   var commun = toks[0].filter(function (t) { return toks.every(function (x) { return x.indexOf(t) >= 0; }); });
-  return ids.map(function (id) {
-    var nom = M.prod[id].nom, mots = nom.split(/\s+/);
-    var garde = function (x) { var t = vTokens(x)[0]; return t ? commun.indexOf(t) < 0 && !vTokMatch(t, T) : /^(m|ml|mm|cm)$/i.test(x); };
-    var w = mots.filter(garde);
-    if (!w.some(function (x) { return vTokens(x)[0]; })) w = mots.filter(function (x) { var t = vTokens(x)[0]; return t && commun.indexOf(t) < 0; });
-    var lisible = w.filter(function (x) { return !(/\d/.test(x) && /[\/.\-]/.test(x) && x.length > 8); });   // « ZC.0,65MM/100MM-2ML » : illisible à voix haute
-    if (lisible.some(function (x) { return vTokens(x)[0]; })) w = lisible;
-    return (w.join(' ') || nom).toLowerCase();
-  });
+  var lab = function (nom, sans) {
+    var mots = nom.split(/\s+/), k = [];
+    mots.forEach(function (x, i) {
+      var t = vTokens(x)[0];
+      if (t) { if (!vTokMatch(t, T) && sans.indexOf(t) < 0 && !(/\d/.test(x) && /[\/.\-]/.test(x) && x.length > 8)) k.push(i); }   // codes type « ZC.0,65MM/100MM-2ML » : illisibles à voix haute
+      else if (k.length && k[k.length - 1] === i - 1) k.push(i);                                   // « 2 m » : l'unité suit le nombre
+    });
+    while (k.length && !vTokens(mots[k[k.length - 1]])[0] && !/^(m|ml|mm|cm|kg)$/i.test(mots[k[k.length - 1]])) k.pop();
+    return k.map(function (i) { return mots[i]; }).join(' ').toLowerCase();
+  };
+  var r = ids.map(function (id) { return lab(M.prod[id].nom, commun); });
+  if (r.some(function (x) { return !x; })) r = ids.map(function (id) { return lab(M.prod[id].nom, []); });   // l'un n'a rien de plus : on garde « 2 m » pour tous
+  return r.map(function (x, i) { return x || M.prod[ids[i]].nom.toLowerCase(); });
 }
 var FEMININS = ['bande', 'feuille', 'descente', 'gouttiere', 'ardoise', 'volige', 'latte', 'contre', 'planche', 'pointe', 'vis', 'patte', 'chatiere', 'crapaudine', 'baguette', 'tole', 'plaque', 'tuile', 'faitiere', 'rive', 'sortie', 'boite', 'chanlatte', 'colle', 'mousse', 'cheminee', 'noue', 'fenetre', 'targette', 'telecommande'];
 function vFeminin(dit) { var t = vTokens(dit)[0] || ''; return FEMININS.indexOf(t) >= 0 || /(ette|ion|ure|ere)$/.test(t); }
 function vListe(a) { return a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' ou ' + a[a.length - 1]; }
 function vNom(l) { var p = D().prod[l.pid]; return l.ambigu || !l.dit ? (p ? p.nom.toLowerCase() : l.nom.toLowerCase()) : l.dit; }
-/** La phrase dite à voix haute, toujours construite à partir de ce qui est affiché. */
+/** « les bandes de solin », « les crochets » : le nom tel qu'il l'a dit, avec l'article. */
+function vPluriel(dit) { var m = String(dit || '').split(/\s+/); if (m[0] && !/[sxz]$/i.test(m[0]) && m[0].length > 2) m[0] += /al$/i.test(m[0]) ? '' : 's'; return m.join(' '); }
+function vLes(dit) { var d = String(dit || 'ce produit').trim(); return /^(les|des|la|le|l'|ton|tes|ta)\b/i.test(d) ? d.replace(/^des\b/i, 'les') : (vTokens(d)[0] && /s$|x$/.test(norm(d.split(/\s+/)[0])) ? 'les ' : (vFeminin(d) ? 'la ' : 'le ')) + d; }
+function vEt(a) { return a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' et ' + a[a.length - 1]; }
+/** La phrase dite à voix haute, toujours construite à partir de ce qui est affiché.
+    Ordre : d'abord ce qui est fait (ordres directs), puis les réponses aux questions, puis ce qu'il doit choisir, puis ce qui est inconnu. */
 function composeReponse(V) {
   var M = D(), L = V.lignes.filter(function (l) { return l.statut !== 'skip' && l.statut !== 'refus'; });
   if (!L.length) return 'Il ne reste rien à faire.';
-  var amb = L.filter(function (l) { return l.statut === 'check' && l.ambigu; })[0];
-  if (amb) {
-    var f = vFeminin(amb.dit), lab = vLabels(amb.cands, amb.dit), qui = f ? 'Laquelle' : 'Lequel';
-    var verbe = { info: '', sortie: ' tu sors', entree: ' tu rentres', compte: ' je corrige', commander: ' je commande' }[amb.op] || '';
-    return 'J\'ai trouvé ' + amb.cands.length + ' ' + (amb.dit || 'produits') + ' : ' + vListe(lab.slice(0, 4)) + (lab.length > 4 ? ', et d\'autres' : '') + '. ' + qui + verbe + ' ?';
-  }
-  var chk = L.filter(function (l) { return l.statut === 'check'; })[0];
-  if (chk) return chk.mvc ? 'Quel mouvement ? Choisis dans la liste.' : 'Pour ' + (chk.dit || 'ce produit') + ', je pense à ' + M.prod[chk.cands[0]].nom.toLowerCase() + '. C\'est bien ça ?';
-  var nw = L.filter(function (l) { return l.statut === 'new'; })[0];
-  if (nw) return nw.nom.toLowerCase() + ', je ne le connais pas : je le crée ?';
-  if (L.length > 3) return 'J\'ai compris ' + L.length + ' lignes. Vérifie, puis valide.';
-  var actif = false;
-  var parts = L.map(function (l) {
-    var nom = vNom(l), q = fq(l.qte), st = l.pid ? (M.stock[l.pid] || 0) : 0;
-    if (l.op === 'info') return st > 0 ? 'Il te reste ' + fq(st) + ' ' + nom : 'Tu n\'as plus de ' + nom;
-    actif = true;
+  var pret = function (l) { return l.statut === 'ok' || l.statut === 'create'; };
+  var act = L.filter(function (l) { return pret(l) && l.op !== 'info'; }), info = L.filter(function (l) { return pret(l) && l.op === 'info'; });
+  var amb = L.filter(function (l) { return l.statut === 'check' && l.ambigu; }), chk = L.filter(function (l) { return l.statut === 'check' && !l.ambigu; });
+  var nw = L.filter(function (l) { return l.statut === 'new'; });
+  var out = [];
+  // 1) ordres directs
+  if (act.length > 3) out.push('J\'ai noté ' + act.length + ' mouvements.');
+  else if (act.length) out.push(act.map(function (l) {
+    var nom = vNom(l), q = fq(l.qte);
     if (l.op === 'sortie') return q + ' ' + nom + ' en moins' + (V.chantier ? ' pour ' + V.chantier : '');
     if (l.op === 'entree') return q + ' ' + nom + ' en plus';
     if (l.op === 'compte') return nom + ' : je mets le stock à ' + q;
     if (l.op === 'commander') return q + ' ' + nom + ' en commande';
     var m = mvById(l.mid);
-    return (l.op === 'supprimer' ? 'Je supprime ' : 'Je refais ') + (m ? ({ entree: 'l\'entrée', sortie: 'la sortie', ajust: 'la correction' }[m.type] || 'le mouvement') + ' de ' + fq(Math.abs(num(m.delta))) + ' ' + nom : 'ce mouvement');
-  });
-  var txt = parts.join('. ') + '.';
-  if (!actif && L.length === 1) {
-    var e = M.etat[L[0].pid];
-    txt += e === 'bas' || e === 'rupt' ? ' C\'est sous ton seuil : je le mets en commande ?' : ' Tu veux en sortir, en rentrer, corriger ou commander ?';
-  } else if (actif) txt += ' Tu valides ?';
-  return txt;
+    return (l.op === 'supprimer' ? 'je supprime ' : 'je refais ') + (m ? ({ entree: 'l\'entrée', sortie: 'la sortie', ajust: 'la correction' }[m.type] || 'le mouvement') + ' de ' + fq(Math.abs(num(m.delta))) + ' ' + nom : 'ce mouvement');
+  }).join(', ').replace(/^./, function (c) { return c.toUpperCase(); }) + '.');
+  // 2) réponses aux questions
+  info.forEach(function (l) { var st = M.stock[l.pid] || 0; out.push(st > 0 ? 'Il te reste ' + fq(st) + ' ' + vNom(l) + '.' : 'Tu n\'as plus de ' + vNom(l) + '.'); });
+  // 3) à choisir
+  if (amb.length === 1) {
+    var a1 = amb[0], f = vFeminin(a1.dit), n1 = a1.nbTrouves || a1.cands.length, qui = f ? 'Laquelle' : 'Lequel';
+    var verbe = { info: '', sortie: ' tu sors', entree: ' tu rentres', compte: ' je corrige', commander: ' je commande' }[a1.op] || '';
+    if (a1.cands.length <= 4) out.push('Pour ' + vLes(vPluriel(a1.dit)) + ', j\'ai trouvé ' + n1 + ' produits : ' + vListe(vLabels(a1.cands, a1.dit)) + '. ' + qui + verbe + ' ?');
+    else out.push('Pour ' + vLes(vPluriel(a1.dit)) + ', j\'ai trouvé ' + n1 + ' produits : choisis ' + (f ? 'la bonne' : 'le bon') + ' à l\'écran.');
+  } else if (amb.length > 1) {
+    out.push(amb.map(function (l, i) { return (i ? 'pour ' : 'Pour ') + vLes(vPluriel(l.dit)) + ', ' + (i ? '' : 'j\'ai trouvé ') + (l.nbTrouves || l.cands.length) + (i ? '' : ' produits'); }).join(', et ').replace(/, et (?=[^,]*$)/, ', et ') + '. Choisis le bon à chaque fois' +
+      (amb.some(function (l) { return l.op === 'info'; }) ? ', et dis-moi ce que tu veux en faire.' : '.'));
+  }
+  chk.forEach(function (l) { out.push(l.mvc ? 'Quel mouvement ? Choisis dans la liste.' : 'Pour ' + (l.dit || 'ce produit') + ', je pense à ' + M.prod[l.cands[0]].nom.toLowerCase() + '. C\'est bien ça ?'); });
+  // 4) inconnus
+  if (nw.length === 1) out.push(nw[0].op === 'info' ? 'Je n\'ai pas de ' + nw[0].nom.toLowerCase() + ' dans le stock. Je le crée ?' : 'Je ne connais pas ' + nw[0].nom.toLowerCase() + ' : je le crée ?');
+  else if (nw.length > 1) out.push('Je ne connais pas ' + vEt(nw.map(function (l) { return l.nom.toLowerCase(); })) + ' : je les crée ?');
+  // 5) la suite
+  var questions = amb.length + chk.length + nw.length;
+  if (!questions) {
+    if (!act.length && info.length === 1) {
+      var e = M.etat[info[0].pid];
+      out.push(e === 'bas' || e === 'rupt' ? 'C\'est sous ton seuil : je le mets en commande ?' : 'Tu veux en sortir, en rentrer, corriger ou commander ?');
+    } else if (act.length) out.push('Tu valides ?');
+  }
+  return out.join(' ');
 }
 /** Il répond au micro « le 25 », « l'anthracite », « le deuxième »… : l'appli choisit parmi ce qu'elle a proposé. */
 function choisirParLaVoix(l, t) {
@@ -813,11 +871,12 @@ A.voxValidate = function () {
     if (l.dit && !l.ambigu && !l.choisi) ops.push(put('Alias', { id: 'a' + hashKey(voxKey(l.dit)), fournisseur: 'voix', libelle: voxKey(l.dit).slice(5), produit: pid, facteur: '1', maj: now }));
     n++;
   });
+  // la confirmation part TOUT DE SUITE (déjà dans le téléphone), avant l'enregistrement et le retour à l'accueil
+  AUD.garde = true; speak(phraseOk(true), { fixe: true });
   commit(ops);
   VOX = null; saveVox();
   toast('C\'est fait', n + ' ligne' + (n > 1 ? 's' : '') + (inv && V.mode === 'inv' ? ' comptée' + (n > 1 ? 's' : '') + ' dans le recomptage' : ' enregistrée' + (n > 1 ? 's' : '')));
-  go('home', {}, { replace: true });
-  speak(phraseOk(true), { fixe: true });
+  AUD.garde = true; go('home', {}, { replace: true }); AUD.garde = false;
 };
 
 /* ================= Réglages : voix de l'appli ================= */
@@ -842,5 +901,5 @@ A.vxOpen = function () {
   audioCtx(); recCancel(); VX = { st: 'idle', mode: 'mvt', err: '', said: '', append: false }; go('voix', {});
   call('ping', [CFG.code], 15000).catch(function () {});        // réveille le script dès l'ouverture
   liveToken().catch(function () {});                            // jeton de voix prêt à l'avance
-  cachedVoice(phraseOk(), voiceName());
+  prechargerOk();
 };
