@@ -19,7 +19,7 @@ function sideNav() {
   else items.push(['histo', 'history', 'Historique']);
   items.push(['fours', 'truck', 'Fournisseurs']);
   items.push(['reglages', 'gear', 'Réglages']);
-  var n = M.alertes.length;
+  var n = M.aCmd.length;
   return '<nav class="side" aria-label="Menu principal">' +
     '<div class="side-brand"><img src="icons/toit-blanc.png" alt=""><div><b>' + esc((M.reg.entreprise || 'Da Costa').replace(/^EURL\s+/i, '').toUpperCase()) + '</b><span>Stock atelier</span></div></div>' +
     '<div class="side-quick"><button class="sq out" data-a="startMv" data-m="S" title="Sortie">' + ic('minus') + '<span>SORTIE</span></button>' +
@@ -47,7 +47,7 @@ SCREENS.home = function (p) {
   html += '<div class="kpis">';
   if (patron) { var V = valeurStock(); html += '<button class="kpi navy" data-a="sideGo" data-r="inventaire"><span>Valeur du stock (HT)</span><b>' + fe(V.val) + '</b><small>' + (V.sansPrix ? V.sansPrix + ' produit' + (V.sansPrix > 1 ? 's' : '') + ' en stock sans prix' : 'tous les produits en stock ont un prix') + '</small></button>'; }
   html += '<button class="kpi" data-a="sideGo" data-r="stock"><span>Produits suivis</span><b>' + M.prods.length + '</b><small>' + M.fams.length + ' familles · ' + M.foursActifs.length + ' fournisseurs</small></button>' +
-    '<button class="kpi warn" data-a="sideGo" data-r="commandes"><span>À commander</span><b>' + M.alertes.length + '</b><small>sous leur seuil</small></button>' +
+    '<button class="kpi warn" data-a="sideGo" data-r="commandes"><span>À commander</span><b>' + M.aCmd.length + '</b><small>sous leur seuil ou ajoutés</small></button>' +
     '<button class="kpi bad" data-a="stockFilter" data-f="zero"><span>À zéro</span><b>' + M.zeros.length + '</b><small>plus rien en stock</small></button></div>';
   if (patron && M.nbSeuils === 0) html += '<div class="hint"><b>Astuce :</b> règle le seuil d\'alerte des produits que tu rachètes souvent : l\'appli te prévient quand en recommander.</div>';
   html += '<div class="dh-cols">';
@@ -124,9 +124,12 @@ function prodPanel(id) {
   h += '<div class="dp-sec">Derniers mouvements</div>' + (mv.length ? mv.map(function (m) {
     return '<div class="dp-row"><span>' + esc([fday(m.date), userName(m.qui), m.lieu || (m.type === 'depart' ? 'stock de départ' : '')].filter(Boolean).join(' · ')) + '</span>' + mvBadge(m) + '</div>';
   }).join('') : '<div class="dp-row mut">Aucun mouvement</div>');
+  var ic0 = M.cmd[p.id];
+  h += '<button class="cmd-add ' + (ic0 ? 'on' : '') + '" style="margin-top:12px" data-a="panelCmd" data-id="' + p.id + '">' + ic('bell') + '<span class="grow">' + (ic0 ? 'Dans la commande : <b>' + fq(num(ic0.qte)) + '</b> · +1' : 'Ajouter à la commande') + '</span><b>+1</b></button>';
   h += '<button class="btn light" style="margin-top:14px" data-a="openProd" data-id="' + p.id + '">Ouvrir la fiche complète' + (patron ? ' (modifier, prix, seuil)' : '') + '</button>';
   return h;
 }
+A.panelCmd = function (d) { commit(cmdAdd(d.id, 1)); toast('Ajouté à la commande', D().prod[d.id].nom); render(false); };
 A.selProd = function (d) { VIEW.p.sel = d.id; saveView(); render(false); };
 A.stockSort = function (d) { VIEW.p.sort = d.k === 'nom' ? '' : d.k; saveView(); render(false); };
 A.panelMv = function (d) { go('mvt', { mode: d.m, pid: d.id, n: 1, lieu: '', from: 'prod' }); };

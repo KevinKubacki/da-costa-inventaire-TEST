@@ -327,7 +327,8 @@ function recStop() {
     dv.setInt16(i * 2, v < 0 ? v * 0x8000 : v * 0x7FFF, true);
   }
   var wav = new Uint8Array(44 + pcm.length); wav.set(wavHeader(pcm.length, 16000), 0); wav.set(pcm, 44);
-  return { sec: n / R.rate, data: bytesB64(wav) };
+  var peak = 0; for (var k = 0; k < n; k += 4) { var av = Math.abs(all[k]); if (av > peak) peak = av; }
+  return { sec: n / R.rate, data: bytesB64(wav), peak: peak };
 }
 function recCancel() { if (REC) { recStop(); } }
 
@@ -350,7 +351,8 @@ SCREENS.voix = function (p) {
     '<div class="vx-center"><button id="vxMic" class="vx-mic" data-a="vxToggle" aria-label="' + (rec ? 'Arrêter' : 'Parler') + '"' + (think ? ' disabled' : '') + '>' +
     '<i class="h h3"></i><i class="h h2"></i><i class="h h1"></i><span class="core">' + (think ? '<i class="vx-spin"></i>' : ic(rec ? 'stop' : 'mic')) + '</span></button>' +
     '<div class="vx-title">' + title + '</div><div class="vx-sub">' + sub + '</div>' +
-    (st === 'err' && VX.said ? '<div class="vx-said">Tu as dit : « ' + esc(VX.said) + ' »</div>' : '') + '</div>';
+    (st === 'err' && VX.said ? '<div class="vx-said">J\'ai entendu : « ' + esc(VX.said) + ' »</div>' : '') +
+    (st === 'err' && VX.wav ? '<button class="small-btn vx-replay" data-a="vxPlayRec">' + ic('replay') + 'Réécouter mon enregistrement</button>' : '') + '</div>';
   if (!rec && !think) {
     html += '<div class="vx-ex"><span>PAR EXEMPLE</span>' + VX_EX[VX.mode].map(function (x) { return '<div>« ' + esc(x) + ' »</div>'; }).join('') + '</div>';
   }
@@ -378,20 +380,29 @@ A.vxToggle = function () {
   }
   var r = recStop();
   if (!r || r.sec < 0.6) { VX.st = 'err'; VX.err = 'Je n\'ai rien entendu. Appuie une fois, parle, puis rappuie.'; render(false); return; }
+  VX.wav = r.data;                                                    // pour « Réécouter mon enregistrement » en cas de souci
+  if (r.peak < 0.012) {                                               // le micro n'a capté que du silence (souvent : Bluetooth de la voiture)
+    VX.st = 'err'; VX.said = '';
+    VX.err = 'Le micro n\'a presque rien capté. Si le téléphone est relié en Bluetooth (voiture, écouteurs), coupe le Bluetooth ou parle tout près du téléphone, puis réessaie.';
+    render(false); return;
+  }
   VX.st = 'think'; render(false);
   livePrepare(voiceName()).catch(function () {});      // la voix se connecte pendant que Gemini réfléchit
   var t0 = Date.now();
-  call('voix', [CFG.code, { audio: r.data, mime: 'audio/wav', mode: VX.mode, ctx: voixCtx() }], 120000).then(function (doc) {
+  call('voix', [CFG.code, { audio: r.data, mime: 'audio/wav', mode: VX.mode, ctx: voixCtx(), avant: VX.append && VOX ? VOX.transcription || '' : '' }], 120000).then(function (doc) {
     VX.said = doc.transcription || '';
     var lignes = doc.lignes || [];
     if (!lignes.length) { lignes = doc.lignes = derniersParLaVoix(VX.said); if (lignes.length) doc.reponse = 'Je supprime ' + (lignes.length > 1 ? 'les ' + lignes.length + ' derniers mouvements' : 'le dernier mouvement') + '. Vérifie, puis valide.'; }
+    if (!lignes.length) { lignes = doc.lignes = phraseLocale(VX.said); if (lignes.length) doc.reponse = 'Voilà ce que j\'ai trouvé. Vérifie, puis valide.'; }
     if (lignes.length) doc.comprehensible = true;
     if (!doc.comprehensible || !lignes.length) {
-      VX.st = 'err'; VX.err = 'Je n\'ai pas compris de produit. Réessaie en disant la quantité et le produit.';
+      VX.st = 'err'; VX.err = VX.said ? 'Je n\'ai pas trouvé de produit dans ta phrase. Redis-la avec la quantité et le nom du produit (« retire 195 crochets de gouttière »).' :
+        'Je n\'ai rien compris de clair. Réécoute ton enregistrement ci-dessous : si le son est mauvais, coupe le Bluetooth ou parle plus près du téléphone.';
       render(false); speak(PHRASE_REPETE, { fixe: true });
       return;
     }
     var nv = buildVox(doc);
+    reponseInfo(nv);
     if (VX.append && VOX) {
       var base = VOX.lignes.length;
       nv.lignes.forEach(function (l, i) { l.k = 'l' + (base + i); VOX.lignes.push(l); });
@@ -420,10 +431,10 @@ function buildVox(doc) {
   var ok = function (id) { return id && M.prod[id] && M.prod[id].actif !== '0' ? id : ''; };
   var four = doc.fournisseur_id && M.four[doc.fournisseur_id] && M.four[doc.fournisseur_id].actif !== '0' ? doc.fournisseur_id : (doc.fournisseur ? matchFour({ fournisseur: doc.fournisseur }) : '');
   var lignes = (doc.lignes || []).map(function (l, i) {
-    var op = ['sortie', 'compte', 'supprimer', 'dupliquer'].indexOf(l.action) >= 0 ? l.action : 'entree';
+    var op = ['sortie', 'compte', 'info', 'commander', 'supprimer', 'dupliquer'].indexOf(l.action) >= 0 ? l.action : 'entree';
     var L = { k: 'l' + i, op: op, qte: Math.abs(num(l.quantite)), dit: String(l.dit || '').trim(), pid: '', cands: [], statut: 'new',
       nom: upName(l.nom_propose || l.dit), famille: M.fam[l.famille_proposee] ? l.famille_proposee : (M.fams[0] ? M.fams[0].id : ''), source: '' };
-    if (!(L.qte >= 0) || (op !== 'compte' && !L.qte)) L.qte = op === 'compte' ? 0 : 1;
+    if (!(L.qte >= 0) || (op !== 'compte' && op !== 'info' && !L.qte)) L.qte = op === 'compte' || op === 'info' ? 0 : 1;
     var al = M.alias[voxKey(L.dit)], pid = ok(l.produit_id), others = (l.autres_ids || []).map(ok).filter(Boolean);
     if (op === 'supprimer' || op === 'dupliquer') return mvLine(L, l.mouvement_id, pid);
     if (al && ok(al.produit)) { L.pid = al.produit; L.statut = 'ok'; L.source = 'appris'; }
@@ -435,6 +446,34 @@ function buildVox(doc) {
   return { source: 'voix', mode: VX.mode, four: four, fourNom: String(doc.fournisseur || '').trim(), chantier: String(doc.chantier || '').trim(),
     transcription: String(doc.transcription || ''), reponse: String(doc.reponse || ''), confirmation: String(doc.confirmation || 'C\'est noté !'), lignes: lignes };
 }
+/** Question (« combien il me reste… ») : la réponse parlée est faite ici avec le stock exact du téléphone. */
+function reponseInfo(V) {
+  var L = V.lignes.filter(function (l) { return l.statut !== 'skip'; });
+  if (!L.length || !L.every(function (l) { return l.op === 'info' && l.statut === 'ok'; })) return;
+  var M = D(), bas = false;
+  V.reponse = L.map(function (l) {
+    var p = M.prod[l.pid], q = M.stock[l.pid] || 0, quoi = l.dit || p.nom.toLowerCase();
+    if (M.etat[l.pid] === 'bas' || M.etat[l.pid] === 'rupt') bas = true;
+    return q > 0 ? 'Il te reste ' + fq(q).replace('−', 'moins ') + ' ' + quoi + '.' : 'Tu n\'as plus de ' + quoi + '.';
+  }).join(' ') + (bas ? (L.length > 1 ? ' Certains sont sous le seuil : je les mets en commande ?' : ' C\'est sous ton seuil : je le mets en commande ?') : '');
+}
+/** Filet si Gemini n'a rendu aucune ligne : l'appli lit elle-même « verbe + quantité + produit » dans ce qu'il a entendu. */
+var MOTS_VIDES = ['de', 'des', 'du', 'la', 'le', 'les', 'un', 'une', 'en', 'au', 'aux', 'moi', 'me', 'm', 'stp', 'pour', 'dans', 'mon', 'ma', 'mes', 'stock', 'il', 'j', 'ai', 'y', 'a', 'reste', 'encore', 'combien', 'est', 'ce', 'que', 'qu', 'te', 'tu', 'peux', 'mets', 'met', 'en', 'commande'];
+function phraseLocale(t) {
+  var n = norm(t || '').replace(/[^a-z0-9,.\s]/g, ' ');
+  if (!n.trim()) return [];
+  var act = /combien|reste.?t.?il|est.ce qu.il (me )?reste/.test(n) ? 'info' : /command/.test(n) ? 'commander' : /(il me reste|il en reste|il y en a|j en ai|en tout)/.test(n) ? 'compte' :
+    /(retir|sor[st]|enleve|prend|utilis|pris)/.test(n) ? 'sortie' : /(ajout|rentr|recu|livr|mets|met )/.test(n) ? 'entree' : '';
+  if (!act) return [];
+  var m = /(\d+(?:[.,]\d+)?)/.exec(n), qte = m ? parseFloat(m[1].replace(',', '.')) : (act === 'info' ? 0 : 1);
+  var mots = n.replace(/\d+([.,]\d+)?/g, ' ').split(/\s+/).filter(function (w) { return w.length > 1 && MOTS_VIDES.indexOf(w) < 0 && !/^(retir|sor|enlev|prend|ajout|rentr|command|utilis)/.test(w); });
+  if (!mots.length) return [];
+  var M = D(), score = function (p) { var h = norm(p.nom); return mots.filter(function (w) { return h.indexOf(w.replace(/s$/, '')) >= 0; }).length; };
+  var best = M.prods.map(function (p) { return { p: p, s: score(p) }; }).filter(function (x) { return x.s > 0; }).sort(function (a, b) { return b.s - a.s; }).slice(0, 3);
+  if (!best.length) return [];
+  return [{ action: act, quantite: qte, dit: mots.join(' '), produit_id: best[0].p.id, confiance: best.length === 1 || best[0].s > best[1].s ? 0.85 : 0.5, autres_ids: best.slice(1).map(function (x) { return x.p.id; }), nom_propose: '', famille_proposee: '' }];
+}
+A.vxPlayRec = function () { if (!VX.wav) return; try { stopSpeak(); new Audio('data:audio/wav;base64,' + VX.wav).play(); } catch (e) {} };
 /* --- revenir sur un mouvement déjà enregistré (supprimer / refaire) --- */
 var NOMBRES = { un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10 };
 /** Si Gemini n'a rien rendu mais que la phrase dit « supprime / annule les N derniers (mouvements) », l'appli le fait elle-même. */
@@ -468,16 +507,19 @@ function mvLine(L, mid, pid) {
 function voxLine(k) { return VOX && VOX.lignes.filter(function (l) { return l.k === k; })[0]; }
 function voxPending() { return VOX ? VOX.lignes.filter(function (l) { return l.statut === 'check' || l.statut === 'new'; }).length : 0; }
 var OPS = { entree: { s: '+', lab: 'Entrée', cls: 'in' }, sortie: { s: '−', lab: 'Sortie', cls: 'out' }, compte: { s: '=', lab: 'Recomptage', cls: 'adj' },
+  info: { s: '?', lab: 'Stock', cls: 'info' }, commander: { s: '🛒', lab: 'À commander', cls: 'cmd' },
   supprimer: { s: '✕', lab: 'Supprimer', cls: 'del' }, dupliquer: { s: '×2', lab: 'Refaire', cls: 'dup' } };
 function voxAfter(l, q) {
   if (l.op === 'supprimer' || l.op === 'dupliquer') { var m = mvById(l.mid), d = m ? num(m.delta) : 0; return l.op === 'supprimer' ? q - d : q + d; }
+  if (l.op === 'info' || l.op === 'commander') return q;
   return l.op === 'entree' ? q + l.qte : l.op === 'sortie' ? q - l.qte : l.qte;
 }
 
 SCREENS.voixVerif = function () {
   if (!VOX) return SCREENS.voix({});
   var M = D(), V = VOX;
-  var nOk = V.lignes.filter(function (l) { return l.statut === 'ok' || l.statut === 'create'; }).length, left = voxPending();
+  var nOk = V.lignes.filter(function (l) { return (l.statut === 'ok' || l.statut === 'create') && l.op !== 'info'; }).length, left = voxPending();
+  var queInfo = !nOk && !left && V.lignes.some(function (l) { return l.op === 'info' && l.statut === 'ok'; });
   var hasIn = V.lignes.some(function (l) { return l.op === 'entree' && l.statut !== 'skip'; });
   var html = '<div class="screen">' + head({ title: 'Voilà ce que j\'ai compris', backAct: 'voxBack',
     sub: esc([V.four ? 'Livraison ' + fourName(V.four) : '', V.chantier ? 'Chantier ' + V.chantier : ''].filter(Boolean).join(' · ')) }) +
@@ -512,11 +554,17 @@ SCREENS.voixVerif = function () {
         '<div class="vmini"><button data-a="voxSkip" data-k="' + l.k + '">Retirer cette ligne</button></div></div>';
     } else if (l.statut === 'skip') {
       html += '<div class="vcard skip"><span class="vsrc">Retirée : <b>' + esc(l.dit) + '</b></span><button class="link" data-a="voxUnskip" data-k="' + l.k + '">Reprendre</button></div>';
+    } else if (l.op === 'info' && l.statut === 'ok') {
+      var pi = M.prod[l.pid], qi = M.stock[l.pid] || 0, si = num(pi.seuil), ci = M.cmd[l.pid];
+      html += '<div class="vcard ok vx-info"><div class="vxi-top"><span class="grow"><span class="t">' + esc(pi.nom) + '</span><span class="s">' + (si > 0 ? 'seuil ' + fq(si) + ' · ' : '') + esc(fourName(pi.four) || '') + '</span></span>' +
+        '<span class="vxi-q ' + (M.etat[l.pid] || '') + '"><b>' + fq(qi) + '</b><small>en stock' + (pi.unite ? ' (' + esc(pi.unite) + ')' : '') + '</small></span></div>' +
+        (ci ? '<div class="vxi-cmd">Déjà dans la commande : ' + fq(num(ci.qte)) + '</div>' : '<button class="cmd-add" data-a="voxToCmd" data-k="' + l.k + '">' + ic('bell') + '<span class="grow">Mettre en commande</span><b>+' + fq(defQty(pi)) + '</b></button>') + '</div>';
     } else {
       var p = l.statut === 'create' ? { nom: l.nom } : M.prod[l.pid], q = l.statut === 'create' ? 0 : (M.stock[l.pid] || 0);
       var mvm = l.mid ? mvById(l.mid) : null;
       var info = mvm ? o.lab + ' : ' + mvDesc(mvm) : [o.lab, l.op === 'entree' && V.four ? fourName(V.four) : '', l.op === 'sortie' && V.chantier ? 'Chantier ' + V.chantier : '', l.source === 'appris' ? 'reconnu (déjà dit)' : ''].filter(Boolean).join(' · ');
-      html += '<button class="vcard ok vxl" data-a="voxMenu" data-k="' + l.k + '"><span class="vxq ' + o.cls + '">' + (mvm ? o.s : o.s + fq(l.qte)) + '</span><span class="grow"><span class="t">' + esc(p ? p.nom : '?') +
+      if (l.op === 'commander') info = 'À commander · ajouté à la liste, le stock ne change pas';
+      html += '<button class="vcard ok vxl" data-a="voxMenu" data-k="' + l.k + '"><span class="vxq ' + o.cls + '">' + (mvm ? o.s : l.op === 'commander' ? '+' + fq(l.qte) : o.s + fq(l.qte)) + '</span><span class="grow"><span class="t">' + esc(p ? p.nom : '?') +
         (l.statut === 'create' ? ' <span class="badge" style="background:#DCE6FF;color:#1E3A8A">nouveau</span>' : '') + '</span>' +
         '<span class="s">' + esc(info) + ' · stock ' + fq(q) + ' → ' + fq(voxAfter(l, q)) + '</span></span></button>';
     }
@@ -524,9 +572,10 @@ SCREENS.voixVerif = function () {
   if (V.lignes.some(function (l) { return l.statut === 'ok'; })) html += '<p style="text-align:center;font-size:13px;color:var(--muted);margin:6px 0 0">Touche une ligne pour la corriger ou la retirer</p>';
   html += '<button class="btn light" style="margin-top:14px" data-a="voxCancel">' + ic('trash') + 'Tout annuler</button></div>' +
     '<div class="bottom-bar"><div style="text-align:center;font-size:14px;font-weight:600;margin-bottom:8px;color:' + (left ? '#7A3D00' : 'var(--green-ink)') + '">' +
-    (left ? 'Encore ' + left + ' point' + (left > 1 ? 's' : '') + ' à regarder' : nOk + ' ligne' + (nOk > 1 ? 's' : '') + ' prête' + (nOk > 1 ? 's' : '')) + '</div>' +
+    (left ? 'Encore ' + left + ' point' + (left > 1 ? 's' : '') + ' à regarder' : queInfo ? 'Rien n\'est modifié dans le stock' : nOk + ' ligne' + (nOk > 1 ? 's' : '') + ' prête' + (nOk > 1 ? 's' : '')) + '</div>' +
     '<div class="vx-bar"><button class="vx-more" data-a="voxMore" aria-label="Compléter à la voix">' + ic('mic') + '</button>' +
-    '<button class="btn green" style="height:62px;font-size:22px" data-a="voxValidate" ' + (left || !nOk ? 'disabled' : '') + '>Valider ' + (nOk > 1 ? 'les ' + nOk + ' lignes' : 'la ligne') + '</button></div></div></div>';
+    (queInfo ? '<button class="btn" style="height:62px;font-size:22px" data-a="voxDone">OK, merci</button>' :
+    '<button class="btn green" style="height:62px;font-size:22px" data-a="voxValidate" ' + (left || !nOk ? 'disabled' : '') + '>Valider ' + (nOk > 1 ? 'les ' + nOk + ' lignes' : 'la ligne') + '</button>') + '</div></div></div>';
   return html;
 };
 function voxSet(k, fn) { var l = voxLine(k); if (!l) return; fn(l); saveVox(); render(false); }
@@ -535,7 +584,7 @@ A.voxReplay = function () { audioCtx(); if (VOX) speak(VOX.reponse); };
 function voixCtx() {
   var M = D();
   return {
-    catalogue: M.prods.map(function (p) { return p.id + ' | ' + upName(p.nom) + ' | ' + p.famille + ' | ' + round3(M.stock[p.id] || 0) + (p.four && M.four[p.four] ? ' | ' + M.four[p.four].nom : ''); }).join('\n'),
+    catalogue: M.prods.map(function (p) { return p.id + ' | ' + upName(p.nom) + ' | ' + p.famille + ' | ' + round3(M.stock[p.id] || 0) + ' | ' + (p.four && M.four[p.four] ? M.four[p.four].nom : '') + ' | ' + (num(p.seuil) > 0 ? round3(num(p.seuil)) : ''); }).join('\n'),
     fournisseurs: M.foursActifs.map(function (f) { return f.id + ' | ' + f.nom; }).join('\n'),
     familles: M.fams.map(function (f) { return f.id + ' | ' + f.nom; }).join('\n'),
     mouvements: M.moves.filter(function (m) { return m.type !== 'depart'; }).slice(0, 30).map(function (m) {
@@ -575,7 +624,7 @@ A.voxMenu = function (d) {
   }
   var l = l0, nm = l.statut === 'create' ? l.nom : (D().prod[l.pid] || {}).nom || '';
   openSheet('<h3>' + esc(nm) + '</h3><p>Tu as dit : ' + esc(l.dit) + '</p>' +
-    '<div class="seg3">' + ['entree', 'sortie', 'compte'].map(function (op) { return '<button class="' + (l.op === op ? 'on ' + OPS[op].cls : '') + '" data-a="voxOp" data-k="' + l.k + '" data-op="' + op + '">' + OPS[op].s + ' ' + OPS[op].lab + '</button>'; }).join('') + '</div>' +
+    '<div class="seg3">' + ['entree', 'sortie', 'compte', 'commander'].map(function (op) { return '<button class="' + (l.op === op ? 'on ' + OPS[op].cls : '') + '" data-a="voxOp" data-k="' + l.k + '" data-op="' + op + '">' + OPS[op].s + ' ' + OPS[op].lab + '</button>'; }).join('') + '</div>' +
     '<button class="menu-item" data-a="voxQty" data-k="' + l.k + '">' + ic('edit') + 'Modifier la quantité (' + fq(l.qte) + ')</button>' +
     '<button class="menu-item" data-a="voxChange" data-k="' + l.k + '">' + ic('stock') + 'Ce n\'est pas ce produit</button>' +
     (l.statut === 'create' ? '<button class="menu-item" data-a="voxRename" data-k="' + l.k + '">' + ic('tag') + 'Changer le nom ou la famille</button>' : '') +
@@ -610,6 +659,8 @@ A.voxCancel = function () {
     if (!ok) return; stopSpeak(); VOX = null; saveVox(); go('home', {}, { replace: true });
   });
 };
+A.voxToCmd = function (d) { var l = voxLine(d.k), p = l && D().prod[l.pid]; if (!p) return; voxSet(d.k, function (x) { x.op = 'commander'; x.qte = defQty(p); }); };
+A.voxDone = function () { stopSpeak(); VOX = null; saveVox(); go('home', {}, { replace: true }); };
 A.voxValidate = function () {
   audioCtx();
   var V = VOX, M = D(); if (!V || voxPending()) return;
@@ -628,6 +679,8 @@ A.voxValidate = function () {
       ops.push(put('Produits', { id: pid, nom: upName(l.nom), famille: l.famille, unite: '', seuil: '0', four: l.op === 'entree' && V.four ? V.four : '', ref: '', notes: '', actif: '1', cree: now }));
     }
     var q = l.statut === 'create' ? 0 : (M.stock[pid] || 0);
+    if (l.op === 'info') return;
+    if (l.op === 'commander') { ops.push(cmdAdd(pid, l.qte)); n++; return; }
     if (l.op === 'entree') ops.push(put('Mouvements', { id: uid('m'), date: now, produit: pid, delta: String(round3(l.qte)), type: 'entree', qui: ME, lieu: V.four ? 'Livraison (à la voix)' : 'À la voix', fournisseur: V.four || '', prix: '', note: 'voix' }));
     else if (l.op === 'sortie') ops.push(put('Mouvements', { id: uid('m'), date: now, produit: pid, delta: String(-round3(l.qte)), type: 'sortie', qui: ME, lieu: V.chantier || 'À la voix', fournisseur: '', prix: '', note: 'voix' }));
     else if (inv) ops.push(put('Comptages', { id: inv.id + '_' + pid, inventaire: inv.id, produit: pid, compte: String(l.qte), qui: ME, date: now }));

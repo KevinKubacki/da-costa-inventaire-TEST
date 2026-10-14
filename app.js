@@ -138,7 +138,7 @@ function head(o) {
   return o.below ? '<div class="stick">' + h + '<div class="stick-below">' + o.below + '</div></div>' : h;
 }
 function nav(cur) {
-  var M = D(), n = M.alertes.length;
+  var M = D(), n = M.aCmd.length;
   var items = [['home', 'home', 'Accueil'], ['stock', 'stock', 'Stock'], ['commandes', 'bell', 'À commander']];
   items.push(isPatron() ? ['inventaire', 'inv', 'Inventaire'] : ['histo', 'history', 'Historique']);
   return '<nav class="nav">' + items.map(function (it) {
@@ -396,7 +396,7 @@ SCREENS.home = function () {
     '<button class="big in" data-a="startMv" data-m="E">' + ic('plus') + '<div><b>ENTRÉE</b><span>Je range une livraison</span></div></button></div>' +
     syncBar() + '</div><div class="scroll">' +
     '<div class="tiles"><button class="tile" data-a="nav" data-r="stock"><b>' + M.prods.length + '</b><span>produits</span></button>' +
-    '<button class="tile ' + (M.alertes.length ? 'warn' : '') + '" data-a="nav" data-r="commandes"><b>' + M.alertes.length + '</b><span>à commander</span></button>' +
+    '<button class="tile ' + (M.aCmd.length ? 'warn' : '') + '" data-a="nav" data-r="commandes"><b>' + M.aCmd.length + '</b><span>à commander</span></button>' +
     '<button class="tile ' + (M.zeros.length ? 'bad' : '') + '" data-a="stockFilter" data-f="zero"><b>' + M.zeros.length + '</b><span>à zéro</span></button></div>';
   if (patron && M.nbSeuils === 0) html += '<div class="hint"><b>Astuce :</b> règle le seuil d\'alerte des produits que tu rachètes souvent (fiche produit › Seuil d\'alerte). L\'appli te dira quand en recommander.</div>';
   if (M.alertes.length) {
@@ -577,15 +577,19 @@ SCREENS.prod = function (p) {
     return '<button class="line" data-a="mvInfo" data-id="' + m.id + '">' + mvBadge(m) + '<div class="grow"><span class="t ell">' + esc(m.type === 'depart' ? 'Stock de départ' : m.type === 'ajust' ? 'Correction du stock' : m.type === 'sortie' ? (m.lieu || 'Sortie') : (fourName(m.fournisseur) || m.lieu || 'Entrée')) +
       '</span><span class="s ell">' + esc([userName(m.qui), fdate(m.date)].filter(Boolean).join(' · ')) + '</span></div><span class="s" style="color:var(--muted);font-size:14px">→ ' + fq(s) + '</span></button>';
   }).join('');
-  var html = '<div class="screen"><header class="head" style="padding-bottom:30px"><div class="head-row"><button class="icon-btn back" data-a="back" aria-label="Retour">' + ic('back') + '</button><span style="flex:1"></span>' +
+  var inCmd = M.cmd[pr.id];
+  var html = '<div class="screen"><div class="prod-fixed"><header class="head" style="padding-bottom:30px"><div class="head-row"><button class="icon-btn back" data-a="back" aria-label="Retour">' + ic('back') + '</button><span style="flex:1"></span>' +
     (patron ? '<button class="icon-btn" data-a="editProd" aria-label="Modifier">' + ic('edit') + '</button>' : '') + '</div>' +
     '<div class="sub" style="font-weight:600;letter-spacing:.04em">' + esc([famName(pr.famille), fourName(pr.four)].filter(Boolean).join(' · ').toUpperCase()) + '</div>' +
     '<h1 style="font-size:29px">' + esc(pr.nom) + '</h1>' +
     '<div class="big-qty"><b>' + fq(q) + '</b><div class="grow"><span class="sub">' + esc(pr.unite || 'en stock') + (pr.unite ? ' en stock' : '') + '</span>' + badge + '</div></div></header>' +
-    '<div class="scroll" style="padding-top:0"><div class="over-actions"><button style="background:var(--red)" data-a="prodMv" data-m="S">− Sortie</button><button style="background:var(--green)" data-a="prodMv" data-m="E">+ Entrée</button></div>' +
-    '<div class="card"><div class="kv"><span style="display:flex;flex-direction:column"><span style="color:var(--ink);font-weight:600">Seuil d\'alerte</span><span style="font-size:13px">' +
+    '<div class="pf-under"><div class="over-actions"><button style="background:var(--red)" data-a="prodMv" data-m="S">− Sortie</button><button style="background:var(--green)" data-a="prodMv" data-m="E">+ Entrée</button></div>' +
+    '<div class="card pf-card"><div class="kv"><span style="display:flex;flex-direction:column"><span style="color:var(--ink);font-weight:600">Seuil d\'alerte</span><span style="font-size:13px">' +
     (seuil > 0 ? 'Alerte quand il en reste ' + fq(seuil) + ' ou moins' : 'Pas d\'alerte pour ce produit') + '</span></span>' +
     (patron ? stepper('seuil', 'seuil', seuil, 'Saisir le seuil') : '<b>' + fq(seuil) + '</b>') + '</div>' +
+    '<button class="cmd-add ' + (inCmd ? 'on' : '') + '" data-a="prodCmd">' + ic('bell') + '<span class="grow">' + (inCmd ? 'Dans la commande : <b>' + fq(num(inCmd.qte)) + '</b> · toucher pour +1' : 'Ajouter à la commande') + '</span>' +
+    (inCmd ? '<u data-a="cmdOut" data-id="' + pr.id + '">retirer</u>' : '<b>+1</b>') + '</button></div></div></div>' +
+    '<div class="scroll" style="padding-top:0"><div class="card">' +
     (pr.ref ? '<div class="kv"><span>Référence</span><span>' + esc(pr.ref) + '</span></div>' : '') +
     (pr.unite ? '<div class="kv"><span>Compté en</span><span>' + esc(pr.unite) + '</span></div>' : '') +
     (pr.notes ? '<div class="kv"><span>Notes</span><span style="white-space:pre-line">' + esc(pr.notes) + '</span></div>' : '') + '</div>';
@@ -606,6 +610,7 @@ SCREENS.prod = function (p) {
   return html;
 };
 A.prodMv = function (d) { go('mvt', { mode: d.m, pid: VIEW.p.id, n: 1, lieu: '', from: 'prod' }); };
+A.prodCmd = function () { var p = D().prod[VIEW.p.id]; if (!p) return; commit(cmdAdd(p.id, 1)); toast('Ajouté à la commande', p.nom + ' · ' + fq(num(D().cmd[p.id] ? D().cmd[p.id].qte : 1))); render(false); };
 A.seuil = function (d) {
   var pr = D().prod[VIEW.p.id]; if (!pr) return;
   commit(put('Produits', { id: pr.id, seuil: String(Math.max(0, num(pr.seuil) + num(d.d))) })); render(false);
@@ -772,7 +777,7 @@ A.saveProd = function () {
 /* ================= à commander ================= */
 SCREENS.commandes = function (p) {
   var M = D(), patron = isPatron();
-  var items = M.alertes.slice();
+  var items = M.aCmd.slice();
   if (p.zeros) M.zeros.forEach(function (x) { if (items.indexOf(x) < 0) items.push(x); });
   var groups = {}, order = [];
   items.forEach(function (x) { var k = x.four && M.four[x.four] ? x.four : 'none'; if (!groups[k]) { groups[k] = []; order.push(k); } groups[k].push(x); });
@@ -797,7 +802,8 @@ SCREENS.commandes = function (p) {
       return '<div class="row" style="' + (on ? 'border:2px solid var(--navy)' : '') + '"><button data-a="cmdSel" data-id="' + x.id + '" aria-label="Cocher" style="width:30px;height:30px;border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center;' +
         (on ? 'background:var(--navy);border:0;color:#fff' : 'background:#fff;border:2px solid #B9BCCB') + '">' + (on ? ic('check') : '') + '</button>' +
         '<div class="grow" data-a="openProd" data-id="' + x.id + '"><span class="t" style="font-size:15px">' + esc(x.nom) + '</span><span class="s" style="color:' + (q <= 0 ? 'var(--red-ink)' : 'var(--orange-ink)') + ';font-weight:600">' +
-        (q <= 0 ? 'Plus rien' : 'Reste ' + fq(q)) + (s > 0 ? ' · seuil ' + fq(s) : '') + (patron && pv !== null ? ' · ' + fe(pv) : '') + '</span></div>' +
+        (q <= 0 ? 'Plus rien' : 'Reste ' + fq(q)) + (s > 0 ? ' · seuil ' + fq(s) : '') + (patron && pv !== null ? ' · ' + fe(pv) : '') + '</span>' +
+        (M.cmd[x.id] ? '<span class="s" style="font-size:12px">ajouté à la commande' + (M.cmd[x.id].qui ? ' par ' + esc(userName(M.cmd[x.id].qui)) : '') + ' · <u data-a="cmdOut" data-id="' + x.id + '">retirer</u></span>' : '') + '</div>' +
         '<div class="stepper" style="gap:4px"><button data-a="cmdQ" data-id="' + x.id + '" data-d="-1" style="width:38px;height:38px" aria-label="Moins">−</button><span class="v" style="min-width:34px;font-size:22px">' + fq(qty) +
         '</span><button data-a="cmdQ" data-id="' + x.id + '" data-d="1" style="width:38px;height:38px" aria-label="Plus">+</button></div></div>';
     }).join('') + '</div>';
@@ -811,7 +817,13 @@ SCREENS.commandes = function (p) {
   html += '</div>' + nav('commandes') + '</div>';
   return html;
 };
-function defQty(x) { var q = stockOf(x.id), s = num(x.seuil); return s > 0 ? Math.max(1, Math.ceil(2 * s - q)) : 1; }
+function defQty(x) { var c = D().cmd[x.id]; if (c) return Math.max(1, num(c.qte)); var q = stockOf(x.id), s = num(x.seuil); return s > 0 ? Math.max(1, Math.ceil(2 * s - q)) : 1; }
+/** V3.2 : mettre un produit à la commande à la main (fiche produit, voix), même si son seuil n'est pas atteint. */
+function cmdAdd(pid, qte) {
+  var c = D().cmd[pid];
+  return put('Commande', { id: 'c_' + pid, produit: pid, qte: String(round3((c ? num(c.qte) : 0) + (qte || 1))), qui: ME, date: nowIso() });
+}
+A.cmdOut = function (d) { var p = D().prod[d.id]; commit(put('Commande', { id: 'c_' + d.id, qte: '0' })); toast('Retiré de la commande', p ? p.nom : ''); render(false); };
 A.cmdFour = function (d) { VIEW.p.four = d.v; saveView(); render(false); };
 A.cmdZeros = function () { VIEW.p.zeros = !VIEW.p.zeros; saveView(); render(false); };
 A.cmdSel = function (d) { var s = VIEW.p.sel = VIEW.p.sel || {}; s[d.id] = s[d.id] === false; saveView(); render(false); };
@@ -823,7 +835,7 @@ A.cmdQ = function (d) {
 function cmdText() {
   var p = VIEW.p, M = D(), cur = p._cur, f = M.four[cur], u = me();
   var lines = [];
-  var items = M.alertes.slice(); if (p.zeros) M.zeros.forEach(function (x) { if (items.indexOf(x) < 0) items.push(x); });
+  var items = M.aCmd.slice(); if (p.zeros) M.zeros.forEach(function (x) { if (items.indexOf(x) < 0) items.push(x); });
   items.filter(function (x) { return (x.four && M.four[x.four] ? x.four : 'none') === cur && (p.sel || {})[x.id] !== false; }).forEach(function (x) {
     var qty = (p.qty || {})[x.id] !== undefined ? p.qty[x.id] : defQty(x);
     var pr = (M.prix[x.id] || []).filter(function (y) { return y.fournisseur === cur; })[0];

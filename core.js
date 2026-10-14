@@ -1,7 +1,7 @@
 /* Stock Da Costa — données locales, synchronisation automatique, calculs */
 'use strict';
 
-var APP_VERSION = '3.1';
+var APP_VERSION = '3.2';
 window.STOCK_V2 = true;   // dit au filet de sécurité de config.js que cette version est à jour
 var CFG = window.STOCK_CONFIG || {};
 var IS_TEST = CFG.test === true;                       // version de test de Kevin (config.js : test: true)
@@ -238,6 +238,15 @@ function D() {
     if (q <= 0) M.zeros.push(p);
   });
   M.alertes.sort(function (a, b) { return ((M.stock[a.id] || 0) / (num(a.seuil) || 1)) - ((M.stock[b.id] || 0) / (num(b.seuil) || 1)); });
+  // V3.2 : produits mis « à la commande » à la main (fiche produit, voix) ; ils sortent de la liste dès qu'une entrée arrive
+  M.cmd = {};
+  vals('Commande').forEach(function (c) {
+    var p = M.prod[c.produit]; if (!p || p.actif === '0' || num(c.qte) <= 0) return;
+    var recu = (M.movesBy[c.produit] || []).some(function (m) { return m.type === 'entree' && m.date > c.date; });
+    if (!recu) M.cmd[c.produit] = c;
+  });
+  M.aCmd = M.alertes.slice();
+  Object.keys(M.cmd).forEach(function (pid) { if (M.aCmd.indexOf(M.prod[pid]) < 0) M.aCmd.push(M.prod[pid]); });
 
   // chantiers récents (sorties) et dernière utilisation des produits
   var seen = {}; M.chantiers = [];
