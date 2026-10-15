@@ -82,7 +82,7 @@ SCREENS.facture = function () {
     html += '<button class="row" style="border:2px solid #F6B969;margin-bottom:14px" data-a="go" data-r="verif">' + ic('file') +
       '<div class="grow"><span class="t">Vérification en cours</span><span class="s">' + esc((VERIF.fourNom || 'Facture') + (VERIF.numero ? ' · n° ' + VERIF.numero : '')) + ' · à terminer' + (VQUEUE.length ? ' (+ ' + VQUEUE.length + ' autre' + (VQUEUE.length > 1 ? 's' : '') + ')' : '') + '</span></div>' + ic('chev') + '</button>';
   }
-  if (FACT.err) html += '<div class="hint" style="background:var(--red-bg);color:var(--red-ink)"><b>Lecture impossible.</b> ' + esc(FACT.err) + '</div>' + (FACT.prog && FACT.prog.length > 1 ? progList(FACT.prog) : '');
+  if (FACT.err) html += (FACT.devis ? '<div class="hint" style="background:var(--orange-bg);color:#7A3D00"><b>Devis : rien n\'est rangé.</b> ' : '<div class="hint" style="background:var(--red-bg);color:var(--red-ink)"><b>Lecture impossible.</b> ') + esc(FACT.err) + '</div>' + (FACT.prog && FACT.prog.length > 1 ? progList(FACT.prog) : '');
   if (!FACT.pages.length) {
     html += '<label for="inPhoto" class="big-pick main">' + '<span class="ico">' + ic('camera') + '</span><span><b>Photographier la facture</b><span>Une ou plusieurs photos si elle est longue</span></span></label>' +
       '<label for="inFile" class="big-pick">' + '<span class="ico soft">' + ic('file') + '</span><span><b>Choisir un PDF ou une image</b><span>Une facture déjà sur le téléphone</span></span></label>' +
@@ -109,7 +109,7 @@ function progList(P) {
   return '<div class="fprog">' + P.map(function (x, i) {
     var s = Math.round((Date.now() - x.t0) / 1000);
     var st = x.etat === 'prep' ? 'Préparation…' : x.etat === 'lit' ? 'Gemini lit les lignes… ' + s + ' s' : x.etat === 'ok' ? esc(x.four || 'Fournisseur ?') + ' — ' + x.n + ' ligne' + (x.n > 1 ? 's' : '') + ' trouvée' + (x.n > 1 ? 's' : '') :
-      x.etat === 'skip' ? 'Pas une facture de matériel : ignorée' : 'Erreur : ' + esc(x.msg || '');
+      x.etat === 'skip' ? (x.devis ? 'Devis / offre de prix : rien n\'entre en stock' : 'Pas une facture de matériel : ignorée') : 'Erreur : ' + esc(x.msg || '');
     return '<div class="fp ' + x.etat + '"><span class="fp-i">' + (x.etat === 'ok' ? '✓' : x.etat === 'skip' ? '–' : x.etat === 'err' ? '!' : '<i class="spin"></i>') + '</span><span class="grow"><b>' + (P.length > 1 ? 'Facture ' + (i + 1) + ' · ' : '') + esc(x.nom) + '</b><span>' + st + '</span></span></div>';
   }).join('') + '</div>';
 }
@@ -128,6 +128,7 @@ A.fRead = function () {
       return call('facture', [CFG.code, { files: d.pages.map(function (p) { return { mime: p.mime, data: p.data }; }), archive: archive }], 150000);
     }).then(function (doc) {
       if (!doc.est_document_achat && !(doc.lignes || []).length) { P.etat = 'skip'; return; }
+      if (/devis|offre/i.test(doc.type_document || '')) { P.etat = 'skip'; P.devis = true; return; }   // V3.10 : un devis / une offre de prix n'entre jamais en stock
       var v = buildVerif(doc); v.deja = doc.deja || null; v.vid = uid('v'); if (window.ORIG) ORIG[v.vid] = d.pages; P.etat = 'ok'; P.n = (doc.lignes || []).length; P.four = v.fourNom || (v.four ? fourName(v.four) : '');
       lus[i] = v;
       // logo du fournisseur : découpé dans la facture (si Gemini l'a trouvé), proposé pour sa fiche
@@ -139,14 +140,15 @@ A.fRead = function () {
     clearInterval(FACT.timer); FACT.busy = false;
     var ok = lus.filter(Boolean), P = FACT.prog, ign = P.filter(function (x) { return x.etat === 'skip'; }).length, err = P.filter(function (x) { return x.etat === 'err'; });
     if (!ok.length) {
-      FACT.err = P.length === 1 ? (err.length ? err[0].msg : 'Ce document ne ressemble pas à une facture de matériel.') : 'Aucune facture de matériel trouvée.';
+      FACT.devis = P.length === 1 && !!P[0].devis;
+      FACT.err = P.length === 1 ? (err.length ? err[0].msg : P[0].devis ? 'C\'est un devis (offre de prix) : rien n\'entre en stock. Range la facture quand le matériel sera livré.' : 'Ce document ne ressemble pas à une facture de matériel.') : 'Aucune facture de matériel trouvée.';
       render(false); return;
     }
     ok.forEach(function (v, i) { v.pos = i + 1; v.tot = ok.length; });
     FACT.pages = [];
     if (VERIF) VQUEUE = VQUEUE.concat(ok); else { VERIF = ok[0]; VQUEUE = VQUEUE.concat(ok.slice(1)); }
     saveVerif();
-    var autres = [ign ? ign + ' ignorée' + (ign > 1 ? 's' : '') + ' (pas du matériel)' : '', err.length ? err.length + ' illisible' + (err.length > 1 ? 's' : '') : ''].filter(Boolean).join(' · ');
+    var autres = [ign ? ign + ' ignorée' + (ign > 1 ? 's' : '') + ' (devis ou pas du matériel)' : '', err.length ? err.length + ' illisible' + (err.length > 1 ? 's' : '') : ''].filter(Boolean).join(' · ');
     if (ok.length > 1 || autres) toast(ok.length + ' facture' + (ok.length > 1 ? 's' : '') + ' à vérifier', autres || 'l\'une après l\'autre');
     go('verif', {}, { replace: true });
   });
@@ -265,15 +267,67 @@ function matchFour(doc) {
   })[0];
   return hit ? hit.id : '';
 }
+/* ---------- V3.8 : garde-fous avant de ranger (unités, prix) ---------- */
+/** « (BOÎTE 100) », « BTE 200 », « PACK 2500 », « SAC 25 » : combien de pièces dans le conditionnement écrit dans un nom. */
+function tailleBoite(nom) {
+  var m = /(?:bo[iî]tes?|bte|bt|paquets?|pqt|pack|sacs?|cartons?|lots?)\.?\s*(?:de\s*)?(\d{2,5})\b/i.exec(String(nom || ''));
+  return m ? +m[1] : 0;
+}
+/** Fournisseur(s) d'un produit : son fournisseur habituel s'il en a un (c'est lui qui compte, même si un autre prix a été noté par erreur),
+    sinon ceux qui ont un prix. Liste vide = produit sans fournisseur (ex. inventaire papier) : il peut servir à tout le monde. */
+function prodFours(pid) {
+  var M = D(), p = M.prod[pid], f = [];
+  if (p && p.four) return [p.four];
+  (M.prix[pid] || []).forEach(function (x) { if (x.fournisseur && f.indexOf(x.fournisseur) < 0) f.push(x.fournisseur); });
+  return f;
+}
+function autreFour(pid, four) { var f = prodFours(pid); return !!(four && f.length && f.indexOf(four) < 0); }
+/** V3.9 (demande de Jimmy) : un article d'un AUTRE fournisseur n'est jamais rangé sur un produit existant, même s'il lui ressemble
+    (vis 6X120 Prolians ≠ VIS ROCKET 6×120 Chausson) : un produit distinct par fournisseur (analyses d'achats, négociation).
+    Vaut aussi pour une association apprise par erreur. Seul un choix fait à la main par Jimmy (« Autre produit ») passe outre. */
+function unAutreFournisseur(L, four) {
+  if (!four || L.source === 'choisi' || L.statut === 'create' || L.statut === 'skip') return;
+  if (L.pid && autreFour(L.pid, four)) { L.pid = ''; L.statut = 'new'; L.source = ''; L.facteur = 1; L.alerte = null; }
+  L.cands = (L.cands || []).filter(function (id) { return !autreFour(id, four); });
+  if (L.statut === 'check' && !L.pid && !L.cands.length) L.statut = 'new';
+}
+/** Contrôle une ligne rapprochée d'un produit existant : unité qui ne colle pas, prix très différent de d'habitude. */
+function vControle(L) {
+  if (L.statut !== 'ok' || !L.pid || L.alerteOk) return;
+  var M = D(), p = M.prod[L.pid]; if (!p) return;
+  var n = tailleBoite(p.nom), nf = tailleBoite(L.libelle);
+  if (n > 1 && L.facteur === 1 && nf !== n && L.qte >= n / 2) {   // le stock compte des boîtes de n, la facture des pièces
+    L.alerte = { type: 'unite', n: n }; L.statut = 'check'; L.cands = [L.pid]; return;
+  }
+  var ref = isPatron() && L.prix !== null ? prixRef(L.pid) : null, u = L.prix !== null ? L.prix / L.facteur : null;
+  if (ref && ref.prix > 0 && u > 0 && (u / ref.prix > 4 || u / ref.prix < 0.25)) { L.alerte = { type: 'prix', avant: ref.prix }; L.statut = 'check'; L.cands = [L.pid]; }
+}
+function totalLignes(V) {
+  var t = 0, ok = true;
+  V.lignes.forEach(function (l) { if (l.statut === 'skip') return; if (l.prix === null) { ok = false; return; } t += l.qte * l.prix; });
+  return ok ? Math.round(t * 100) / 100 : null;
+}
+A.vUnite = function (d) { vSet(d.k, function (l) { var n = l.alerte ? l.alerte.n : 1; l.facteur = 1 / n; l.statut = 'ok'; l.alerte = null; l.alerteOk = true; }); };
+A.vAlerteOk = function (d) { vSet(d.k, function (l) { l.statut = 'ok'; l.alerte = null; l.alerteOk = true; }); };
+/** Famille quand Gemini n'en propose pas : d'après le 1er mot qui parle (VIS… → Clous & vis), sinon Divers, sinon la 1re. */
+var FAM_MOTS = [['clous', /\b(VIS|POINTES?|CLOUS?|CHEVILLES?|TIREFONDS?|RIVETS?|BOULONS?|ECROUS?|AGRAFES?)\b/], ['plomb', /\bPLOMB\b/], ['ardoise', /\bARDOISES?\b/],
+  ['fonte', /\bFONTE\b/], ['bois', /\b(VOLIGES?|BASTAINGS?|BASTINS?|CHEVRONS?|LITEAUX?|LITEAU|MADRIERS?|PLANCHES?)\b/], ['etancheite', /\b(MEMBRANES?|ECRAN|SILICONE|MASTIC|BITUME|ETANCH)/], ['zinc', /\b(ZINC|ZN|GOUTTIERES?|DESCENTES?|COUDES?)\b/]];
+function famDevinee(nom) {
+  var M = D(), n = String(nom || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  for (var i = 0; i < FAM_MOTS.length; i++) if (M.fam[FAM_MOTS[i][0]] && FAM_MOTS[i][1].test(n)) return FAM_MOTS[i][0];
+  return M.fam.divers ? 'divers' : (M.fams[0] ? M.fams[0].id : '');
+}
 function buildVerif(doc) {
   var M = D(), four = matchFour(doc);
   var ok = function (id) { return id && M.prod[id] && M.prod[id].actif !== '0' ? id : ''; };
   var lignes = (doc.lignes || []).map(function (l, i) {
-    var qte = num(l.quantite) || 1, prix = numOrNull(l.prix_unitaire_ht);
-    if (prix === null && numOrNull(l.montant_ht) !== null) prix = round3(num(l.montant_ht) / qte);
+    var qte = num(l.quantite) || 1, prix = numOrNull(l.prix_unitaire_ht), mt = numOrNull(l.montant_ht), corr = false;
+    // V3.8 : le MONTANT de la ligne fait foi (prix « au cent » ou « au mille » : 500 vis × 1,91 €/100 = 9,55 €)
+    if (mt !== null && mt > 0 && qte > 0) { var pm = mt / qte; if (prix === null || Math.abs(prix - pm) > Math.max(0.005, pm * 0.05)) { corr = prix !== null; prix = pm; } }
+    if (prix !== null) prix = rnd5(prix);
     var L = { k: 'l' + i, libelle: String(l.libelle || '').trim(), ref: String(l.reference || '').trim(), qte: qte, unite: String(l.unite || '').trim(),
       prix: prix, facteur: num(l.conditionnement) > 0 ? num(l.conditionnement) : 1, pid: '', cands: [], statut: 'new',
-      nom: upName(l.nom_propose || l.libelle), famille: M.fam[l.famille_proposee] ? l.famille_proposee : (M.fams[0] ? M.fams[0].id : ''), source: '' };
+      nom: upName(l.nom_propose || l.libelle), famille: M.fam[l.famille_proposee] ? l.famille_proposee : famDevinee(l.nom_propose || l.libelle), source: '', montant: mt, prixCorr: corr };
     var al = four && M.alias[lineKey(four, L.libelle)];
     var byRef = four && L.ref ? Object.keys(M.prix).filter(function (pid) { return ok(pid) && M.prix[pid].some(function (x) { return x.fournisseur === four && x.ref && norm(x.ref) === norm(L.ref); }); })[0] : '';
     var pid = ok(l.produit_id), others = (l.autres_ids || []).map(ok).filter(Boolean);
@@ -282,6 +336,8 @@ function buildVerif(doc) {
     else if (pid && num(l.confiance) >= 0.8) { L.pid = pid; L.statut = 'ok'; }
     else if (pid) { L.statut = 'check'; L.cands = [pid].concat(others.filter(function (x) { return x !== pid; })).slice(0, 3); }
     else { L.statut = 'new'; L.cands = others.slice(0, 2); }
+    unAutreFournisseur(L, four);
+    vControle(L);
     return L;
   });
   return { source: 'facture', four: four, fourNom: upName(doc.fournisseur || ''), fourChoix: four ? 'ok' : '', numero: String(doc.numero || '').trim(),
@@ -298,13 +354,19 @@ SCREENS.verif = function () {
   var M = D(), V = VERIF;
   var nOk = V.lignes.filter(function (l) { return l.statut === 'ok' || l.statut === 'create'; }).length;
   var nCheck = V.lignes.filter(function (l) { return l.statut === 'check'; }).length, nNew = V.lignes.filter(function (l) { return l.statut === 'new'; }).length;
-  var dup = V.four && V.numero && M.factures.filter(function (f) { return f.fournisseur === V.four && norm(f.numero) === norm(V.numero); })[0];
+  var numsV = String(V.numero || '').split('+').map(function (x) { return norm(x).replace(/[^a-z0-9]/g, ''); }).filter(Boolean);
+  var dup = V.four && V.numero && M.factures.filter(function (f) { return f.fournisseur === V.four && (norm(f.numero) === norm(V.numero) || String(f.numero || '').split('+').some(function (x) { return numsV.indexOf(norm(x).replace(/[^a-z0-9]/g, '')) >= 0; })); })[0];
   if (!dup && V.deja && (!V.four || V.four === V.deja.fournisseur)) dup = V.deja;   // vérifié par le script (salarié)
   var html = '<div class="screen">' + head({ cls: 'green', title: V.tot > 1 ? 'Facture ' + V.pos + '/' + V.tot : 'Vérifier la facture', backAct: 'vBack',
     sub: esc([V.four ? fourName(V.four) : V.fourNom, V.numero ? 'n° ' + V.numero : '', fday(V.date), V.total !== null ? fe(V.total) + ' HT' : ''].filter(Boolean).join(' · ')),
     extra: '<div class="vchips"><span class="vc ok">' + nOk + ' reconnue' + (nOk > 1 ? 's' : '') + '</span>' + (nCheck ? '<span class="vc check">' + nCheck + ' à vérifier</span>' : '') + (nNew ? '<span class="vc new">' + nNew + ' nouveau' + (nNew > 1 ? 'x' : '') + '</span>' : '') + '</div>' }) +
     '<div class="scroll nonav" style="padding-bottom:170px">';
   if (dup) html += '<div class="hint" style="background:var(--orange-bg);color:#7A3D00"><b>Déjà rangée ?</b> Une facture ' + esc(fourName(V.four)) + ' n° ' + esc(V.numero) + ' a été rangée le ' + fday(dup.rangee) + '. Vérifie avant de valider pour ne pas compter deux fois.</div>';
+  var tl = totalLignes(V);
+  if (V.total !== null && V.total > 0 && tl !== null && Math.abs(tl - V.total) > Math.max(1, V.total * 0.03)) {
+    html += '<div class="hint vtotal" style="background:var(--orange-bg);color:#7A3D00"><b>Le total ne colle pas :</b> les lignes font ' + fe(tl) + ', la facture ' + fe(V.total) + ' HT. ' +
+      (tl > V.total ? 'Un prix est sans doute trop haut (prix au cent ?).' : 'Il manque peut-être une ligne.') + ' Vérifie avant de valider.</div>';
+  } else if (V.total !== null && V.total > 0 && tl !== null) html += '<div class="vtotal-ok">' + ic('check') + 'Total des lignes : ' + fe(tl) + ' · facture : ' + fe(V.total) + ' HT</div>';
   if (V.logo && !(V.four && M.four[V.four] && M.four[V.four].logo)) {
     html += '<div class="vlogo"><img src="' + V.logo + '" alt="Logo du fournisseur"><div class="grow"><b>Logo trouvé</b><span>Il ira sur la fiche du fournisseur (même si tu abandonnes).</span></div><button class="link" data-a="vNoLogo">Ne pas le garder</button></div>';
   }
@@ -322,14 +384,24 @@ SCREENS.verif = function () {
   }
   var order = { check: 0, new: 1, create: 2, ok: 3, skip: 4 };
   V.lignes.slice().sort(function (a, b) { return order[a.statut] - order[b.statut]; }).forEach(function (l) {
-    var src = '<span class="vsrc">Sur la facture : <b>' + esc(l.libelle) + '</b>' + (l.ref ? ' · réf. ' + esc(l.ref) : '') + ' · ' + fq(l.qte) + (l.unite ? ' ' + esc(l.unite) : '') + (l.prix !== null ? ' × ' + fe(l.prix) : '') + '</span>';
-    if (l.statut === 'check') {
+    var src = '<span class="vsrc">Sur la facture : <b>' + esc(l.libelle) + '</b>' + (l.ref ? ' · réf. ' + esc(l.ref) : '') + ' · ' + fq(l.qte) + (l.unite ? ' ' + esc(l.unite) : '') + (l.prix !== null ? ' × ' + fePu(l.prix) : '') + '</span>';
+    if (l.statut === 'check' && l.alerte) {
+      var pa = M.prod[l.pid], al = l.alerte;
+      html += '<div class="vcard check"><div class="vhead"><span class="dot check"></span>' + src + '</div>' +
+        '<span class="vq check">' + esc(pa ? pa.nom : '?') + '</span>' +
+        (al.type === 'unite' ? '<div class="valerte">Ce produit est compté <b>par boîte de ' + al.n + '</b>, la facture compte <b>' + fq(l.qte) + ' pièces</b>.</div>' +
+          '<button class="btn" style="height:48px;font-size:16px;font-family:Barlow;font-weight:700" data-a="vUnite" data-k="' + l.k + '">Oui : + ' + fq(round3(l.qte / al.n)) + ' boîte' + (l.qte / al.n > 1 ? 's' : '') + ' de ' + al.n + '</button>' +
+          '<div class="vmini"><button data-a="vAlerteOk" data-k="' + l.k + '">Garder + ' + fq(l.qte) + '</button><button data-a="vOther" data-k="' + l.k + '">Autre produit…</button><button data-a="vToNew" data-k="' + l.k + '">C\'est un nouveau</button></div>'
+        : '<div class="valerte">Prix inhabituel : <b>' + fePu(l.prix / l.facteur) + '</b> l\'unité, d\'habitude <b>' + fePu(al.avant) + '</b>. Vérifie le prix sur la facture (prix au cent ?).</div>' +
+          '<div class="btn-row"><button class="btn light" style="height:48px" data-a="vQty" data-k="' + l.k + '">Corriger</button><button class="btn" style="height:48px;font-size:16px;font-family:Barlow;font-weight:700" data-a="vAlerteOk" data-k="' + l.k + '">Le prix est bon</button></div>' +
+          '<div class="vmini"><button data-a="vOther" data-k="' + l.k + '">Autre produit…</button><button data-a="vToNew" data-k="' + l.k + '">C\'est un nouveau</button></div>') + '</div>';
+    } else if (l.statut === 'check') {
       html += '<div class="vcard check"><div class="vhead"><span class="dot check"></span>' + src + '</div><span class="vq check">Je pense que c\'est :</span>' +
         l.cands.map(function (pid, i) { var p = M.prod[pid]; return '<button class="vcand ' + (i === 0 ? 'best' : '') + '" data-a="vPick" data-k="' + l.k + '" data-id="' + pid + '">' + esc(p.nom) + ' <span>· stock ' + fq(M.stock[pid] || 0) + '</span></button>'; }).join('') +
         '<div class="vmini"><button data-a="vOther" data-k="' + l.k + '">Autre produit…</button><button data-a="vToNew" data-k="' + l.k + '">C\'est un nouveau</button><button data-a="vSkip" data-k="' + l.k + '">Ignorer</button></div></div>';
     } else if (l.statut === 'new') {
       html += '<div class="vcard new"><div class="vhead"><span class="dot new"></span>' + src + '</div><span class="vq new">Nouveau produit : je le crée ?</span>' +
-        '<button class="vnew" data-a="vName" data-k="' + l.k + '"><b>' + esc(l.nom) + '</b><span>' + esc(famName(l.famille) + ' · ' + (V.four ? fourName(V.four) : V.fourNom) + (l.prix !== null ? ' · ' + fe(l.prix / l.facteur) + ' HT' : '') + ' · + ' + fq(l.qte * l.facteur)) + ' · <u>modifier</u></span></button>' +
+        '<button class="vnew" data-a="vName" data-k="' + l.k + '"><b>' + esc(l.nom) + '</b><span>' + esc(famName(l.famille) + ' · ' + (V.four ? fourName(V.four) : V.fourNom) + (l.prix !== null ? ' · ' + fePu(l.prix / l.facteur) + ' HT' : '') + ' · + ' + fq(l.qte * l.facteur)) + ' · <u>modifier</u></span></button>' +
         '<div class="btn-row"><button class="btn" style="background:#2F5BD3;font-family:Barlow;font-weight:700;font-size:16px;height:48px" data-a="vCreate" data-k="' + l.k + '">Créer</button><button class="btn light" style="height:48px" data-a="vOther" data-k="' + l.k + '">C\'est un existant</button></div>' +
         (l.cands.length ? '<div class="vmini" style="margin-top:6px">' + l.cands.map(function (pid) { return '<button data-a="vPick" data-k="' + l.k + '" data-id="' + pid + '">' + esc(M.prod[pid].nom) + ' ?</button>'; }).join('') + '</div>' : '') +
         '<div class="vmini"><button data-a="vSkip" data-k="' + l.k + '">Ignorer cette ligne</button></div></div>';
@@ -342,7 +414,7 @@ SCREENS.verif = function () {
         (l.statut === 'create' ? ' <span class="badge" style="background:#DCE6FF;color:#1E3A8A">nouveau</span>' : '') + '</span>' +
         '<span class="s">' + (l.source === 'appris' ? 'reconnu (déjà vu) · ' : l.source === 'réf.' ? 'reconnu par la réf. · ' : '') + 'Facture : ' + esc(l.libelle) + (l.facteur !== 1 ? ' · ' + fq(l.qte) + ' × ' + fq(l.facteur) : '') +
         (l.statut === 'create' ? '' : ' · stock ' + fq(q) + ' → ' + fq(q + l.qte * l.facteur)) + '</span></span>' +
-        '<span class="vqty"><b>+' + fq(l.qte * l.facteur) + '</b>' + (l.prix !== null ? '<span>' + fe(l.prix / l.facteur) + '</span>' : '') + '</span></button>';
+        '<span class="vqty"><b>+' + fq(l.qte * l.facteur) + '</b>' + (l.prix !== null ? '<span>' + fePu(l.prix / l.facteur) + '</span>' : '') + '</span></button>';
     }
   });
   var left = vPending(), n = V.lignes.filter(function (l) { return l.statut === 'ok' || l.statut === 'create'; }).length;
@@ -354,12 +426,12 @@ SCREENS.verif = function () {
 };
 function vSet(k, fn) { var l = vLine(k); if (!l) return; fn(l); saveVerif(); render(false); }
 A.vBack = function () { go('facture', {}, { replace: true }); };
-A.vPick = function (d) { vSet(d.k, function (l) { l.pid = d.id; l.statut = 'ok'; l.source = ''; }); };
+A.vPick = function (d) { vSet(d.k, function (l) { l.pid = d.id; l.statut = 'ok'; l.source = ''; l.alerte = null; l.alerteOk = false; vControle(l); }); };
 A.vSkip = function (d) { vSet(d.k, function (l) { l.prev = l.statut; l.statut = 'skip'; }); };
 A.vUnskip = function (d) { vSet(d.k, function (l) { l.statut = l.pid ? 'ok' : (l.prev === 'create' ? 'create' : 'new'); }); };
 A.vToNew = function (d) { vSet(d.k, function (l) { l.statut = 'new'; l.pid = ''; }); };
 A.vCreate = function (d) { vSet(d.k, function (l) { l.statut = 'create'; l.pid = ''; }); };
-A.vOther = function (d) { openPicker('Quel produit ?', vLine(d.k).libelle, function (pid) { vSet(d.k, function (l) { l.pid = pid; l.statut = 'ok'; l.source = ''; }); }); };
+A.vOther = function (d) { openPicker('Quel produit ?', vLine(d.k).libelle, function (pid) { vSet(d.k, function (l) { l.pid = pid; l.statut = 'ok'; l.source = 'choisi'; l.alerte = null; l.alerteOk = false; vControle(l); }); }); };
 A.vName = function (d) {
   var l = vLine(d.k), M = D();
   openSheet('<h3>Nouveau produit</h3><p>Sur la facture : ' + esc(l.libelle) + '</p>' +
@@ -388,13 +460,18 @@ A.vQty = function (d) {
     openSheet('<h3>Quantité</h3><p>Sur la facture : ' + esc(l.libelle) + ' · ' + fq(l.qte) + (l.unite ? ' ' + esc(l.unite) : '') + '</p>' +
       '<div class="field"><label for="vq">Quantité facturée</label><input id="vq" class="inp" inputmode="decimal" value="' + fq(l.qte).replace('−', '-') + '"></div>' +
       '<div class="field"><label for="vf">1 ' + esc(l.unite || 'unité facturée') + ' = combien de ' + esc(u) + ' dans le stock ?</label><input id="vf" class="inp" inputmode="decimal" value="' + fq(l.facteur) + '">' +
-      '<span class="help">Ex. 10 pour un paquet de 10 si tu comptes à la pièce. Retenu pour les prochaines factures.</span></div>' +
+      '<span class="help">Ex. 10 pour un paquet de 10 si tu comptes à la pièce, 0,01 pour 100 pièces si tu comptes par boîte de 100. Retenu pour les prochaines factures.</span></div>' +
+      (isPatron() ? '<div class="field"><label for="vp">Prix HT pour 1 ' + esc(l.unite || 'unité facturée') + '</label><input id="vp" class="inp" inputmode="decimal" value="' + (l.prix !== null ? String(l.prix).replace('.', ',') : '') + '">' +
+        (l.montant ? '<span class="help">Montant de la ligne sur la facture : ' + fe(l.montant) + ' pour ' + fq(l.qte) + '.</span>' : '') + '</div>' : '') +
       '<button class="btn" data-a="vQtyOk" data-k="' + l.k + '">OK</button>');
   });
 };
 A.vQtyOk = function (d) {
-  var q = numOrNull(document.getElementById('vq').value), f = numOrNull(document.getElementById('vf').value);
-  closeSheet(function () { vSet(d.k, function (l) { if (q !== null && q > 0) l.qte = q; if (f !== null && f > 0) l.facteur = f; }); });
+  var q = numOrNull(document.getElementById('vq').value), f = numOrNull(document.getElementById('vf').value), vp = document.getElementById('vp'), pr = vp ? numOrNull(vp.value) : null;
+  closeSheet(function () { vSet(d.k, function (l) {
+    if (q !== null && q > 0) l.qte = q; if (f !== null && f > 0) l.facteur = f; if (pr !== null && pr >= 0) l.prix = rnd5(pr);
+    if (l.alerte) { l.statut = 'ok'; l.alerte = null; l.alerteOk = true; }   // corrigé à la main : on lui fait confiance
+  }); });
 };
 /** Nouveau fournisseur : sa fiche est pré-remplie avec ce que Gemini a lu sur la facture (V3.1). */
 A.vFourNew = function () {
@@ -436,6 +513,8 @@ function rematchAlias() {
   VERIF.lignes.forEach(function (l) {
     var al = M.alias[lineKey(VERIF.four, l.libelle)];
     if (al && M.prod[al.produit] && (l.statut === 'check' || l.statut === 'new')) { l.pid = al.produit; l.facteur = num(al.facteur) || 1; l.statut = 'ok'; l.source = 'appris'; }
+    unAutreFournisseur(l, VERIF.four);
+    if (l.statut === 'ok' && l.source === 'appris') vControle(l);
   });
 }
 A.vCancel = function () {
@@ -453,10 +532,10 @@ A.vValidate = function () {
   var lab = (V.type === 'commande' ? 'Commande' : V.type === 'livraison' ? 'Livraison' : 'Facture') + (V.numero ? ' n° ' + V.numero : '');
   V.lignes.forEach(function (l) {
     if (l.statut !== 'ok' && l.statut !== 'create') return;
-    var pid = l.pid, unitPrice = l.prix !== null ? round3(l.prix / l.facteur) : null;
+    var pid = l.pid, unitPrice = l.prix !== null ? rnd5(l.prix / l.facteur) : null;
     if (l.statut === 'create') {
       pid = uid('p');
-      ops.push(put('Produits', { id: pid, nom: upName(l.nom), famille: l.famille, unite: '', seuil: '0', four: four, ref: '', notes: '', actif: '1', cree: now }));
+      ops.push(put('Produits', { id: pid, nom: upName(l.nom), famille: l.famille, sfam: sfamDevinee(l.nom, l.famille), unite: '', seuil: '0', four: four, ref: '', notes: '', actif: '1', cree: now }));
     } else if (M.prod[pid] && !M.prod[pid].four) ops.push(put('Produits', { id: pid, four: four }));
     ops.push(put('Mouvements', { id: uid('m'), date: now, produit: pid, delta: String(round3(l.qte * l.facteur)), type: 'entree', qui: ME, lieu: lab, fournisseur: four, prix: unitPrice === null ? '' : String(unitPrice), note: fid }));
     var ex = (M.prix[pid] || []).filter(function (x) { return x.fournisseur === four; })[0];
@@ -577,7 +656,7 @@ SCREENS.factureFiche = function (p) {
       var pr = M.prod[m.produit];
       return '<button class="line" data-a="openProd" data-id="' + m.produit + '"><span class="mv in" style="min-width:48px">+' + fq(num(m.delta)) + '</span>' +
         '<div class="grow"><span class="t ell">' + esc(pr ? pr.nom : 'Produit supprimé') + '</span></div>' +
-        (m.prix ? '<span class="s" style="white-space:nowrap">' + fe(num(m.prix)) + '/u</span>' : '') + '</button>';
+        (m.prix ? '<span class="s" style="white-space:nowrap">' + fePu(num(m.prix)) + '/u</span>' : '') + '</button>';
     }).join('') : '<div class="empty">Plus aucune ligne en stock pour cette facture.</div>') + '</div>';
   html += '<button class="btn danger" style="margin-top:18px" data-a="fCancel" data-id="' + f.id + '">' + ic('trash') + 'Annuler cette facture</button>' +
     '<p style="font-size:13px;color:var(--muted);margin:8px 4px 0">Annuler retire du stock les ' + lignes.length + ' entrée' + (lignes.length > 1 ? 's' : '') + ' de cette facture et met l\'original à la corbeille du Drive. Les produits créés, les prix et ce que l\'appli a appris restent.</p>';

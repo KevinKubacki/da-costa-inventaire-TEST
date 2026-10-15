@@ -1,12 +1,12 @@
 // Service worker : l'appli s'ouvre même sans réseau, et se met à jour toute seule.
 // ⚠ Changer VERSION à chaque livraison (sinon les téléphones gardent l'ancienne version).
-const VERSION = '3.6-2026-10-14';
+const VERSION = '3.11-2026-10-15';
 // Nom du cache propre à CE dossier (officielle /stock/ et test /stock-test/ peuvent être sur le même compte GitHub)
 const SCOPE = new URL(self.registration.scope).pathname;
 const PREFIX = 'stock-dacosta:' + SCOPE + ':';
 const CACHE = PREFIX + VERSION;
 const ASSETS = [
-  './', 'index.html', 'style.css', 'config.js', 'core.js', 'pdf.js', 'app.js', 'facture.js', 'voix.js', 'notif.js', 'bureau.js', 'manifest.webmanifest', 'manifest-test.webmanifest',
+  './', 'index.html', 'style.css', 'config.js', 'core.js', 'pdf.js', 'app.js', 'facture.js', 'voix.js', 'notif.js', 'bureau.js', 'chantiers.js', 'bilan.js', 'manifest.webmanifest', 'manifest-test.webmanifest',
   'lib/jspdf.umd.min.js', 'lib/jspdf.plugin.autotable.min.js',
   'fonts/barlow-latin-400-normal.woff2', 'fonts/barlow-latin-500-normal.woff2', 'fonts/barlow-latin-600-normal.woff2', 'fonts/barlow-latin-700-normal.woff2',
   'fonts/barlow-semi-condensed-latin-600-normal.woff2', 'fonts/barlow-semi-condensed-latin-700-normal.woff2', 'fonts/barlow-semi-condensed-latin-800-normal.woff2',

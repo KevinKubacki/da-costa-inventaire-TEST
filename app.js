@@ -46,6 +46,9 @@ var root = document.getElementById('app');
 function me() { var u = D().user[ME]; return u && u.actif !== '0' ? u : null; }
 function isPatron() { var u = me(); return !!(u && u.role === 'patron'); }
 function famName(id) { var f = D().fam[id]; return f ? f.nom : ''; }
+function sfamName(id) { var x = D().sfam[id]; return x ? x.nom : ''; }
+/** « Clous & vis › Vis » */
+function famSf(p) { var f = famName(p.famille), x = p.sfam && D().sfam[p.sfam]; return x && x.famille === p.famille ? f + ' › ' + x.nom : f; }
 function fourName(id) { var f = D().four[id]; return f ? f.nom : ''; }
 function userName(id) { var u = D().user[id]; return u ? u.nom : (id ? '?' : ''); }
 function initial(s) { return esc((String(s || '?').trim()[0] || '?').toUpperCase()); }
@@ -140,8 +143,8 @@ function head(o) {
 function nav(cur) {
   var M = D(), n = M.aCmd.length;
   var items = [['home', 'home', 'Accueil'], ['stock', 'stock', 'Stock'], ['commandes', 'bell', 'À commander']];
-  items.push(isPatron() ? ['inventaire', 'inv', 'Inventaire'] : ['histo', 'history', 'Historique']);
-  return '<nav class="nav">' + items.map(function (it) {
+  if (isPatron()) { items.push(['inventaire', 'inv', 'Inventaire']); items.push(['bilan', 'chart', 'Bilan']); } else { items.push(['chantiers', 'casque', 'Chantiers']); items.push(['histo', 'history', 'Historique']); }
+  return '<nav class="nav"' + (items.length > 4 ? ' style="grid-template-columns:repeat(' + items.length + ',1fr)"' : '') + '>' + items.map(function (it) {
     return '<button class="' + (cur === it[0] ? 'on' : '') + '" data-a="nav" data-r="' + it[0] + '">' + ic(it[1]) + it[2] +
       (it[0] === 'commandes' && n ? '<span class="dot">' + n + '</span>' : '') + '</button>';
   }).join('') + '</nav>';
@@ -159,7 +162,7 @@ function pill(p) {
   return '<span class="pill ' + (e === 'ok' ? '' : e) + '">' + fq(q) + (p.unite ? '<small>' + esc(p.unite) + '</small>' : '') + '</span>';
 }
 function prodSub(p) {
-  var M = D(), e = M.etat[p.id], s = [famName(p.famille)];
+  var M = D(), e = M.etat[p.id], s = [famSf(p)];
   if (p.four) s.push(fourName(p.four));
   if (isPatron()) { var pr = prixRef(p.id); if (pr) s.push(fe(pr.prix)); }
   if (e === 'bas') s.push('stock bas'); else if (e === 'rupt') s.push('rupture');
@@ -181,7 +184,7 @@ function filterProds(q, f) {
     if (f === 'noprice' && prixRef(p.id)) return false;
     if (f && f.indexOf('fam:') === 0 && p.famille !== f.slice(4)) return false;
     if (!words.length) return true;
-    var hay = norm(p.nom + ' ' + p.ref + ' ' + famName(p.famille) + ' ' + (M.prix[p.id] || []).map(function (x) { return fourName(x.fournisseur) + ' ' + x.ref; }).join(' '));
+    var hay = norm(p.nom + ' ' + p.ref + ' ' + famName(p.famille) + ' ' + sfamName(p.sfam) + ' ' + (M.prix[p.id] || []).map(function (x) { return fourName(x.fournisseur) + ' ' + x.ref; }).join(' '));
     return words.every(function (w) { return hay.indexOf(w) >= 0; });
   });
 }
@@ -205,7 +208,8 @@ function mvSub(m, withProd) {
   var s = [];
   if (m.qui) s.push(userName(m.qui));
   if (m.type === 'entree' && m.fournisseur) s.push(fourName(m.fournisseur));
-  if (m.lieu) s.push(m.lieu);
+  var chn = m.chantier && window.chNom ? chNom(m.chantier) : '';
+  if (chn) s.push(m.type === 'sortie' ? chn : 'Retour de ' + chn); else if (m.lieu) s.push(m.lieu);
   if (m.type === 'ajust') s.push('correction');
   if (m.type !== 'depart' || !m.lieu) s.push(fdate(m.date));
   return s.join(' · ');
@@ -536,7 +540,8 @@ SCREENS.mvt = function (p) {
     '<button class="rnd" data-a="mvN" data-d="1" aria-label="Un de plus">' + ic('plus') + '</button></div>' +
     '<div class="quick">' + [5, 10, 20].map(function (k) { return '<button data-a="mvN" data-d="' + k + '">+' + k + '</button>'; }).join('') + '</div>' +
     '<span class="after ' + (after < 0 ? 'neg' : '') + '">' + (after < 0 ? 'Il n\'en reste que ' + fq(q) + ' !' : (S ? 'Il en restera ' : 'Il y en aura ') + fq(after)) + '</span></div>';
-  if (S) {
+  if (S && window.chChamp) html += chChamp(p, true);
+  else if (S) {
     html += '<div class="field"><label for="lieu">Pour quel chantier ? <span class="help">(facultatif)</span></label>' +
       '<input id="lieu" class="inp" data-i="lieu" autocomplete="off" placeholder="ex. Chantier Martin, Ladon" value="' + esc(p.lieu || '') + '">' +
       (M.chantiers.length ? '<div class="chips wrap">' + M.chantiers.slice(0, 6).map(function (c) { return '<button class="chip ' + (c === p.lieu ? 'on' : '') + '" data-a="mvLieu" data-v="' + esc(c) + '">' + esc(c) + '</button>'; }).join('') + '</div>' : '') + '</div>';
@@ -546,14 +551,16 @@ SCREENS.mvt = function (p) {
     html += '<div class="field"><span class="flabel">Ça vient d\'où ?</span><div class="chips wrap">' +
       fours.map(function (f) { return '<button class="chip ' + (p.four === f.id ? 'on' : '') + '" data-a="mvFour" data-v="' + f.id + '">' + esc(f.nom) + '</button>'; }).join('') +
       '<button class="chip ' + (p.four === 'retour' ? 'on' : '') + '" data-a="mvFour" data-v="retour">Retour de chantier</button></div></div>';
+    if (p.four === 'retour' && window.chChamp) html += chChamp(p, false);
     if (patron && p.four && p.four !== 'retour') {
       html += '<div class="field"><label for="prix">Prix d\'achat HT à l\'unité <span class="help">(facultatif)</span></label>' +
         '<input id="prix" class="inp" data-i="mvPrix" inputmode="decimal" autocomplete="off" placeholder="ex. 12,50" value="' + esc(p.prix || '') + '">' +
         (p.prixInfo ? '<span class="help">' + esc(p.prixInfo) + '</span>' : '') + '</div>';
     }
   }
-  html += '</div><div class="bottom-bar"><button class="btn ' + (S ? 'red' : 'green') + '" data-a="saveMvt" ' + (n > 0 ? '' : 'disabled') + ' style="height:62px;font-size:23px">' +
-    (S ? 'Valider la sortie de ' : 'Valider l\'entrée de ') + fq(n) + '</button></div></div>';
+  var manqueCh = !S && p.four === 'retour' && !p.ch && window.chChamp;
+  html += '</div><div class="bottom-bar"><button class="btn ' + (S ? 'red' : 'green') + '" data-a="saveMvt" ' + (n > 0 && !manqueCh ? '' : 'disabled') + ' style="height:62px;font-size:23px">' +
+    (manqueCh ? 'Choisis le chantier' : (S ? 'Valider la sortie de ' : (p.four === 'retour' ? 'Valider le retour de ' : 'Valider l\'entrée de ')) + fq(n)) + '</button></div></div>';
   return html;
 };
 function prefillPrix(p) {
@@ -561,7 +568,7 @@ function prefillPrix(p) {
   p.prix = row && numOrNull(row.prix) !== null ? fq(row.prix) : '';
   p.prixInfo = row && numOrNull(row.prix) !== null ? 'Dernier prix connu chez ' + fourName(p.four) + (row.maj ? ' (' + fday(row.maj) + ')' : '') : '';
 }
-A.mvBack = function () { var p = VIEW.p; go('pick', { mode: p.mode, lieu: p.lieu || '', q: p.q || '', f: p.f || '' }, { replace: true }); };
+A.mvBack = function () { var p = VIEW.p; go('pick', { mode: p.mode, lieu: p.lieu || '', ch: p.ch || '', retour: p.retour || '', q: p.q || '', f: p.f || '' }, { replace: true }); };
 A.mvMode = function (d) { VIEW.p.mode = d.m; saveView(); render(false); };
 A.mvN = function (d) { VIEW.p.n = Math.max(0, round3((VIEW.p.n || 0) + num(d.d))); saveView(); render(false); };
 A.mvNSet = function () { askNumber({ title: 'Quantité', value: VIEW.p.n }).then(function (v) { if (v !== null && v >= 0) { VIEW.p.n = round3(v); saveView(); render(false); } }); };
@@ -577,7 +584,8 @@ A.saveMvt = function () {
     var id = uid('m'), four = !S && p.four && p.four !== 'retour' ? p.four : '';
     var prix = !S && isPatron() && four ? numOrNull(p.prix) : null;
     var ops = [put('Mouvements', { id: id, date: nowIso(), produit: pr.id, delta: String(S ? -n : n), type: S ? 'sortie' : 'entree', qui: ME,
-      lieu: S ? (p.lieu || '').trim() : (p.four === 'retour' ? 'Retour de chantier' : ''), fournisseur: four, prix: prix === null ? '' : String(prix), note: '' })];
+      lieu: S ? (p.ch && window.chNom ? chNom(p.ch) : (p.lieu || '').trim()) : (p.four === 'retour' ? 'Retour de chantier' : ''), fournisseur: four, prix: prix === null ? '' : String(prix), note: '',
+      chantier: p.ch && (S || p.four === 'retour') ? p.ch : '' })];
     if (four) {
       var ex = (M.prix[pr.id] || []).filter(function (x) { return x.fournisseur === four; })[0];
       if (prix !== null) ops.push(put('Prix', { id: ex ? ex.id : uid('x'), produit: pr.id, fournisseur: four, prix: String(prix), ref: ex ? ex.ref : '', maj: nowIso() }));
@@ -589,7 +597,7 @@ A.saveMvt = function () {
     var msg = (S ? '−' : '+') + fq(n) + ' ' + pr.nom;
     toast(msg, 'Stock : ' + fq(after), function () { commit(del('Mouvements', id)); toast('Annulé', pr.nom); render(false); });
     if (p.from === 'prod') { back(); return; }
-    go('pick', { mode: p.mode, lieu: p.lieu || '', done: msg + ' · stock : ' + fq(after) }, { replace: true });
+    go('pick', { mode: p.mode, lieu: p.lieu || '', ch: p.ch || '', retour: p.retour || '', done: msg + ' · stock : ' + fq(after) }, { replace: true });
   };
   if (S && n > q) {
     ask({ title: 'Stock insuffisant ?', text: 'L\'appli n\'en compte que <b>' + fq(q) + '</b>. Valider quand même ? Le stock passera à ' + fq(q - n) + '.', ok: 'Valider quand même' })
@@ -686,9 +694,10 @@ A.mvInfo = function (d) {
   openSheet('<h3>' + t + ' : ' + (num(m.delta) > 0 ? '+' : '') + fq(m.delta) + '</h3><p>' + esc(pr ? pr.nom : 'Produit supprimé') + '</p>' +
     '<div class="card" style="margin-bottom:14px"><div class="kv"><span>Date</span><span>' + esc(fday(m.date) + ' ' + m.date.slice(11, 16).replace(':', 'h')) + '</span></div>' +
     (m.qui ? '<div class="kv"><span>Par</span><span>' + esc(userName(m.qui)) + '</span></div>' : '') +
-    (m.lieu ? '<div class="kv"><span>' + (m.type === 'sortie' ? 'Chantier' : 'Info') + '</span><span>' + esc(m.lieu) + '</span></div>' : '') +
+    (m.lieu || m.chantier ? '<div class="kv"><span>' + (m.type === 'sortie' || m.chantier ? 'Chantier' : 'Info') + '</span><span>' + esc(window.chDe && chDe(m) ? chNom(chDe(m)) + (m.type === 'entree' ? ' (retour)' : '') : m.lieu) + '</span></div>' : '') +
+    (patron && m.pu ? '<div class="kv"><span>Prix au jour de la sortie</span><span>' + fePu(num(m.pu)) + '/u</span></div>' : '') +
     (m.fournisseur ? '<div class="kv"><span>Fournisseur</span><span>' + esc(fourName(m.fournisseur)) + '</span></div>' : '') +
-    (patron && m.prix ? '<div class="kv"><span>Prix unitaire HT</span><span>' + fe(num(m.prix)) + '</span></div>' : '') + '</div>' +
+    (patron && m.prix ? '<div class="kv"><span>Prix unitaire HT</span><span>' + fePu(num(m.prix)) + '</span></div>' : '') + '</div>' +
     (pr && VIEW.r !== 'prod' ? '<button class="btn light" style="margin-bottom:10px" data-a="mvOpenProd" data-id="' + pr.id + '">Voir le produit</button>' : '') +
     (canDel ? '<button class="btn danger" data-a="mvDel" data-id="' + m.id + '">' + ic('trash') + 'Supprimer ce mouvement (erreur)</button>' : ''));
 };
@@ -716,7 +725,7 @@ function editForm(id) {
   var lines = (M.prix[id] || []).map(function (x) { return { id: x.id, fournisseur: x.fournisseur, prix: numOrNull(x.prix) === null ? '' : fq(x.prix), ref: x.ref || '', main: x.fournisseur === p.four, orig: x.prix }; });
   if (!lines.length) lines.push({ id: '', fournisseur: p.four || '', prix: '', ref: '', main: true });
   if (!lines.some(function (l) { return l.main; })) lines[0].main = true;
-  return { isNew: false, id: id, nom: p.nom, famille: p.famille, unite: p.unite || '', seuil: num(p.seuil), ref: p.ref || '', notes: p.notes || '', lines: lines };
+  return { isNew: false, id: id, nom: p.nom, famille: p.famille, sfam: p.sfam || '', unite: p.unite || '', seuil: num(p.seuil), ref: p.ref || '', notes: p.notes || '', lines: lines };
 }
 var UNITES = ['pièce', 'mètre', 'ml', 'm²', 'boîte', 'paquet', 'rouleau', 'kg', 'botte', 'litre'];
 SCREENS.edit = function (p) {
@@ -726,6 +735,9 @@ SCREENS.edit = function (p) {
     '<div class="field"><span class="flabel">Famille</span><div class="chips wrap">' + M.fams.map(function (x) {
       return '<button class="chip ' + (f.famille === x.id ? 'on' : '') + '" data-a="fSet" data-k="famille" data-v="' + x.id + '">' + esc(x.nom) + '</button>'; }).join('') +
     '<button class="chip" data-a="newFam">+ Nouvelle</button></div></div>' +
+    (f.famille ? '<div class="field"><span class="flabel">Sous-famille <span class="help">(facultatif)</span></span><div class="chips wrap"><button class="chip ' + (!f.sfam ? 'on' : '') + '" data-a="fSet" data-k="sfam" data-v="">—</button>' +
+      (M.sfamsDe[f.famille] || []).map(function (x) { return '<button class="chip ' + (f.sfam === x.id ? 'on' : '') + '" data-a="fSet" data-k="sfam" data-v="' + x.id + '">' + esc(x.nom) + '</button>'; }).join('') +
+      '<button class="chip" data-a="newSfam" data-f="' + f.famille + '">+ Nouvelle</button></div></div>' : '') +
     '<div class="field"><span class="flabel">Compté en</span><div class="chips wrap"><button class="chip ' + (!f.unite ? 'on' : '') + '" data-a="fSet" data-k="unite" data-v="">—</button>' +
     UNITES.concat(f.unite && UNITES.indexOf(f.unite) < 0 ? [f.unite] : []).map(function (u) { return '<button class="chip ' + (f.unite === u ? 'on' : '') + '" data-a="fSet" data-k="unite" data-v="' + esc(u) + '">' + esc(u) + '</button>'; }).join('') + '</div></div>' +
     '<div style="display:grid;grid-template-columns:' + (f.isNew ? '1fr 1fr' : '1fr') + ';gap:10px;margin-bottom:16px">' +
@@ -751,7 +763,11 @@ SCREENS.edit = function (p) {
   return html;
 };
 I.f = function (v, el) { VIEW.p.f[el.dataset.k] = v; saveView(); };
-A.fSet = function (d) { VIEW.p.f[d.k] = d.v; saveView(); render(false); };
+A.fSet = function (d) {
+  var f = VIEW.p.f; f[d.k] = d.v;
+  if (d.k === 'famille') { var x = D().sfam[f.sfam]; if (!x || x.famille !== d.v) f.sfam = sfamDevinee(f.nom, d.v); }   // V3.11
+  saveView(); render(false);
+};
 A.fstep = function (d) { var f = VIEW.p.f; f[d.k] = Math.max(0, round3(num(f[d.k]) + num(d.d))); saveView(); render(false); };
 A.fstepSet = function (d) {
   var f = VIEW.p.f;
@@ -794,7 +810,8 @@ A.saveProd = function () {
   var id = f.isNew ? uid('p') : f.id;
   var dup = M.prods.filter(function (p) { return p.id !== id && norm(p.nom) === norm(nom); })[0];
   var save = function () {
-    var ops = [put('Produits', { id: id, nom: nom, famille: f.famille || '', unite: f.unite || '', seuil: String(num(f.seuil)), four: main ? main.fournisseur : '', ref: (f.ref || '').trim(), notes: (f.notes || '').trim(), actif: '1' })];
+    var sf = M.sfam[f.sfam] && M.sfam[f.sfam].famille === f.famille ? f.sfam : (f.isNew ? sfamDevinee(nom, f.famille) : '');
+    var ops = [put('Produits', { id: id, nom: nom, famille: f.famille || '', sfam: sf, unite: f.unite || '', seuil: String(num(f.seuil)), four: main ? main.fournisseur : '', ref: (f.ref || '').trim(), notes: (f.notes || '').trim(), actif: '1' })];
     if (f.isNew) {
       ops[0].row.cree = nowIso();
       if (num(f.qte) > 0) ops.push(put('Mouvements', { id: uid('m'), date: nowIso(), produit: id, delta: String(num(f.qte)), type: 'depart', qui: ME, lieu: 'Stock de départ', fournisseur: '', prix: '', note: '' }));
@@ -980,7 +997,8 @@ SCREENS.inventaire = function (p) {
   html += '<div class="card"><div class="card-title"><h2>Valeur du stock aujourd\'hui</h2></div><div style="font-family:var(--cond);font-weight:800;font-size:34px;color:var(--navy)">' + fe(val) + ' <span style="font-size:18px">HT</span></div>' +
     (sansPrix ? '<button class="link" data-a="stockFilter" data-f="noprice" style="text-align:left">' + sansPrix + ' produit' + (sansPrix > 1 ? 's' : '') + ' en stock sans prix : les compléter ›</button>' : '<span class="s" style="color:var(--muted);font-size:14px">' + avecStock + ' produits en stock, tous avec un prix</span>') + '</div>';
   html += '<div class="desk"><button class="desk-tile" data-a="go" data-r="histo"><span class="dt-ic navy">' + ic('history') + '</span><b>Historique</b><span>entrées, sorties, corrections</span></button>' +
-    '<button class="desk-tile" data-a="go" data-r="factures"><span class="dt-ic green">' + ic('file') + '</span><b>Factures</b><span>' + (nbF ? nbF + ' rangée' + (nbF > 1 ? 's' : '') + ' · ' + nbFm + ' ce mois' : 'aucune pour l\'instant') + '</span></button></div>';
+    '<button class="desk-tile" data-a="go" data-r="factures"><span class="dt-ic green">' + ic('file') + '</span><b>Factures</b><span>' + (nbF ? nbF + ' rangée' + (nbF > 1 ? 's' : '') + ' · ' + nbFm + ' ce mois' : 'aucune pour l\'instant') + '</span></button>' +
+    '<button class="desk-tile" data-a="go" data-r="chantiers"><span class="dt-ic orange">' + ic('casque') + '</span><b>Chantiers</b><span>' + (function () { var R = window.CH ? CH() : { list: [] }, n = R.list.filter(function (c) { return !chFini(c); }).length; return n ? n + ' en cours' : (R.list.length ? R.list.length + ' terminé' + (R.list.length > 1 ? 's' : '') : 'suivi du matériel par chantier'); })() + '</span></button></div>';
   html += '<div class="card"><div class="card-title"><h2>PDF pour le comptable</h2></div>' +
     '<div class="field" style="margin:8px 0"><label for="pdate">État du stock au</label><input id="pdate" type="date" class="inp" data-c="pdate" value="' + esc(p.date) + '" max="' + todayIsoDate() + '"></div>' +
     '<button class="opt" data-a="ptog" data-k="prix"><div class="grow"><b style="font-size:15px">Prix et valeur</b><span class="s">prix d\'achat HT et valeur par ligne</span></div><span class="switch ' + (p.prix ? 'on' : '') + '"></span></button>' +
@@ -1113,6 +1131,7 @@ SCREENS.reglages = function () {
   } else {
     html += '<div class="list" style="margin-bottom:14px">' + menuRow('fours', 'truck', 'Fournisseurs', 'Téléphones et contacts') + '</div>';
   }
+  if (patron) html += migrationCard(M);
   html += '<div class="grp">L\'appli</div>';
   if (patron) {
     var fi = FINFO;
@@ -1137,6 +1156,18 @@ SCREENS.reglages = function () {
   if (patron && !FINFO) loadFinfo();
   return html;
 };
+/** V3.9 : rapport du passage Réseau Pro → Chausson Matériaux (fait une fois par le script), avec les conflits réglés. */
+function migrationCard(M) {
+  var r; try { r = JSON.parse(M.reg.migrationRP || ''); } catch (e) { return ''; }
+  if (!r || r.rien || !r.vers || LS.get('migrationVu', '') === r.date) return '';
+  var n = function (x, s, p) { return x + ' ' + (x > 1 ? p : s); };
+  return '<div class="card migr"><div class="card-title"><h2>Réseau Pro → Chausson</h2>' + (r.conflits.length ? '<span class="badge bas">' + n(r.conflits.length, 'conflit', 'conflits') + '</span>' : '<span class="badge ok">fait</span>') + '</div>' +
+    '<p style="margin:0 0 8px;font-size:14px">Tout ce qui était chez <b>Réseau Pro</b> est maintenant chez <b>' + esc(r.vers.replace(/ \(.*\)$/, '')) + '</b>' + (/renomm/.test(r.vers) ? ' (le fournisseur a été renommé)' : ', et Réseau Pro a été supprimé') + '.</p>' +
+    (/renomm/.test(r.vers) ? '' : '<p style="margin:0 0 8px;font-size:13px;color:var(--muted)">' + [n(r.produits, 'produit', 'produits'), n(r.prix, 'prix', 'prix'), n(r.mouvements, 'mouvement', 'mouvements'), n(r.factures, 'facture', 'factures'), n(r.alias, 'libellé appris', 'libellés appris')].join(' · ') + '</p>') +
+    (r.conflits.length ? '<div class="hint" style="background:var(--orange-bg);color:#7A3D00;margin:6px 0"><b>À regarder :</b><ul style="margin:6px 0 0;padding-left:18px">' + r.conflits.map(function (c) { return '<li>' + esc(c) + '</li>'; }).join('') + '</ul></div>' : '') +
+    '<div class="btn-row" style="margin-top:8px"><button class="btn light" data-a="migrVu" data-id="' + esc(r.date) + '">J\'ai vu, masquer</button></div></div>';
+}
+A.migrVu = function (d) { LS.set('migrationVu', d.id); render(false); };
 /** Place utilisée par les factures (demandée au script quand on ouvre Réglages). */
 var FINFO = null, FINFO_BUSY = false;
 function loadFinfo() {
@@ -1349,7 +1380,7 @@ SCREENS.fourEdit = function (p) {
   };
   return '<div class="screen">' + head({ title: f.isNew ? 'Nouveau fournisseur' : 'Modifier' }) + '<div class="scroll nonav">' +
     (f.fromVerif ? '<div class="hint" style="margin-top:0"><b>Fiche pré-remplie avec la facture.</b> Vérifie, complète le contact si tu veux, puis « Ajouter ».</div>' : '') +
-    fld('nom', 'Nom', '', 'ex. Réseau Pro Montargis') + fld('contact', 'Contact <span class="help">(commercial, vendeur…)</span>', '', 'ex. Sébastien') +
+    fld('nom', 'Nom', '', 'ex. Chausson Matériaux Montargis') + fld('contact', 'Contact <span class="help">(commercial, vendeur…)</span>', '', 'ex. Sébastien') +
     '<div class="field"><span class="flabel">Téléphones <span class="help">(agence, portables des commerciaux…)</span></span>' + (f.telsL || []).map(function (t, j) {
       return '<div class="tel-row"><input class="inp" aria-label="Qui (téléphone ' + (j + 1) + ')" autocomplete="off" data-i="fetel" data-j="' + j + '" data-k="l" placeholder="ex. Agence, Marc (commercial)" value="' + esc(t.l) + '">' +
         '<input class="inp" type="tel" inputmode="tel" aria-label="Numéro (téléphone ' + (j + 1) + ')" autocomplete="off" data-i="fetel" data-j="' + j + '" data-k="n" placeholder="02 38 00 00 00" value="' + esc(t.n) + '">' +
@@ -1390,13 +1421,47 @@ A.delFour = function () {
 
 /* familles */
 SCREENS.fams = function () {
-  var M = D(), count = {};
-  M.prods.forEach(function (p) { count[p.famille] = (count[p.famille] || 0) + 1; });
+  var M = D(), count = {}, cs = {};
+  M.prods.forEach(function (p) { count[p.famille] = (count[p.famille] || 0) + 1; if (p.sfam) cs[p.sfam] = (cs[p.sfam] || 0) + 1; });
   return '<div class="screen">' + head({ title: 'Familles de produits' }) + '<div class="scroll nonav"><div class="list">' + M.fams.map(function (f) {
-    return '<div class="row"><div class="grow" data-a="renFam" data-id="' + f.id + '"><span class="t">' + esc(f.nom) + '</span><span class="s">' + (count[f.id] || 0) + ' produit' + ((count[f.id] || 0) > 1 ? 's' : '') + ' · toucher pour renommer</span></div>' +
+    var sf = M.sfamsDe[f.id] || [];
+    return '<div class="row fam-row"><div class="grow"><div data-a="renFam" data-id="' + f.id + '"><span class="t">' + esc(f.nom) + '</span><span class="s">' + (count[f.id] || 0) + ' produit' + ((count[f.id] || 0) > 1 ? 's' : '') + ' · toucher pour renommer</span></div>' +
+      '<div class="sf-chips">' + sf.map(function (x) { return '<button class="chip sf" data-a="sfMenu" data-id="' + x.id + '">' + esc(x.nom) + ' <small>' + (cs[x.id] || 0) + '</small></button>'; }).join('') +
+      '<button class="chip sf add" data-a="newSfam" data-f="' + f.id + '">+ Sous-famille</button></div></div>' +
       (count[f.id] ? '' : '<button class="icon-btn" style="color:var(--red-ink)" data-a="delFam" data-id="' + f.id + '" aria-label="Supprimer">' + ic('trash') + '</button>') + '</div>';
-  }).join('') + '</div><p style="font-size:13px;color:var(--muted);margin:12px 2px">Pour changer un produit de famille : fiche produit › crayon.</p></div>' +
+  }).join('') + '</div><p style="font-size:13px;color:var(--muted);margin:12px 2px">Les sous-familles (ex. Vis, Pointes, Chevilles) servent à la recherche et au Bilan. Pour changer un produit de famille ou de sous-famille : fiche produit › crayon.</p></div>' +
     '<div class="bottom-bar"><button class="btn" data-a="newFam">' + ic('plus') + 'Nouvelle famille</button></div></div>';
+};
+/** V3.11 : sous-familles gérées par Jimmy */
+A.newSfam = function (d) {
+  var M = D(), fam = d.f;
+  askText({ title: 'Nouvelle sous-famille de « ' + famName(fam) + ' »', placeholder: 'ex. Vis', ok: 'Ajouter' }).then(function (name) {
+    name = (name || '').trim(); if (!name) return;
+    var ex = (M.sfamsDe[fam] || []).filter(function (x) { return norm(x.nom) === norm(name); })[0];
+    var id = ex ? ex.id : uid('sf');
+    if (!ex) commit(put('SousFamilles', { id: id, nom: name.charAt(0).toUpperCase() + name.slice(1), famille: fam, ordre: String((M.sfamsDe[fam] || []).length + 1), actif: '1' }));
+    if (VIEW.p.f && VIEW.r === 'edit') VIEW.p.f.sfam = id;
+    saveView(); render(false);
+  });
+};
+A.sfMenu = function (d) {
+  var x = D().sfam[d.id]; if (!x) return;
+  openSheet('<h3>' + esc(x.nom) + '</h3><div class="list">' +
+    '<button class="row" data-a="sfRen" data-id="' + x.id + '"><span class="grow t">Renommer</span></button>' +
+    '<button class="row" data-a="sfDel" data-id="' + x.id + '"><span class="grow t" style="color:var(--red-ink)">Supprimer la sous-famille</span></button></div>');
+};
+A.sfRen = function (d) {
+  var x = D().sfam[d.id];
+  closeSheet(function () { askText({ title: 'Renommer la sous-famille', value: x.nom, ok: 'Renommer' }).then(function (v) { v = (v || '').trim(); if (v && v !== x.nom) { commit(put('SousFamilles', { id: x.id, nom: v })); render(false); } }); });
+};
+A.sfDel = function (d) {
+  var M = D(), x = M.sfam[d.id], ps = M.allProds.filter(function (p) { return p.sfam === x.id; });
+  closeSheet(function () {
+    ask({ title: 'Supprimer « ' + x.nom + ' » ?', text: ps.length ? ps.length + ' produit' + (ps.length > 1 ? 's restent' : ' reste') + ' dans « ' + famName(x.famille) + ' », sans sous-famille.' : '', ok: 'Supprimer', danger: true }).then(function (ok) {
+      if (!ok) return;
+      commit([put('SousFamilles', { id: x.id, actif: '0' })].concat(ps.map(function (p) { return put('Produits', { id: p.id, sfam: '' }); }))); render(false);
+    });
+  });
 };
 A.renFam = function (d) {
   var f = D().fam[d.id];

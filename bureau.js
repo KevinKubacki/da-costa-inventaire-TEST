@@ -8,6 +8,7 @@ var SECTION = {
   home: 'home', stock: 'stock', prod: 'stock', edit: 'stock', pick: 'stock', mvt: 'stock',
   commandes: 'commandes', factures: 'factures', factureFiche: 'factures', facture: 'factures', verif: 'factures',
   inventaire: 'inventaire', comptage: 'inventaire', histo: 'inventaire',
+  chantiers: 'chantiers', chantier: 'chantiers', chantierEdit: 'chantiers', bilan: 'bilan',
   fours: 'fours', four: 'fours', fourEdit: 'fours',
   reglages: 'reglages', equipe: 'reglages', user: 'reglages', entreprise: 'reglages', fams: 'reglages'
 };
@@ -15,8 +16,9 @@ function sideNav() {
   var M = D(), u = me(), patron = isPatron(), cur = SECTION[VIEW.r] || '';
   if (!patron && cur === 'inventaire') cur = 'histo';
   var items = [['home', 'home', patron ? 'Bureau' : 'Accueil'], ['stock', 'stock', 'Stock'], ['commandes', 'bell', 'À commander']];
-  if (patron) { items.push(['factures', 'file', 'Factures']); items.push(['inventaire', 'inv', 'Inventaire & comptable']); }
+  if (patron) { items.push(['factures', 'file', 'Factures']); items.push(['inventaire', 'inv', 'Inventaire & comptable']); items.push(['bilan', 'chart', 'Bilan']); }
   else items.push(['histo', 'history', 'Historique']);
+  items.push(['chantiers', 'casque', 'Chantiers']);
   items.push(['fours', 'truck', 'Fournisseurs']);
   items.push(['reglages', 'gear', 'Réglages']);
   var n = M.aCmd.length;
@@ -186,7 +188,7 @@ var _invPhone = SCREENS.inventaire, PDF_URL = '';
 SCREENS.inventaire = function (p) {
   var h = _invPhone(p);
   if (!wide() || !isPatron()) return h;
-  var mk = '<div class="scroll">', i = h.indexOf(mk), j = h.lastIndexOf('</div><nav class="nav">');
+  var mk = '<div class="scroll">', i = h.indexOf(mk), j = h.lastIndexOf('</div><nav class="nav"');
   if (i < 0 || j < 0) return h;
   AFTER.push(refreshPdfPreview);
   return h.slice(0, i) + '<div class="scroll inv-wide"><div class="inv-grid"><div class="inv-left">' + h.slice(i + mk.length, j) + '</div>' +

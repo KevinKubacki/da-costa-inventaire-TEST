@@ -355,7 +355,7 @@ function recCancel() { if (REC) { recStop(); } }
 /* ================= écran « Parle à l'appli » ================= */
 
 var VX_EX = {
-  mvt: ['Ajoute 10 coudes de 80 et 2 rouleaux de plomb de 30, livraison Réseau Pro', 'Sors 4 bandes de rive pour le chantier Martin'],
+  mvt: ['Ajoute 10 coudes de 80 et 2 rouleaux de plomb de 30, livraison Chausson', 'Sors 4 bandes de rive pour le chantier Martin'],
   inv: ['Volige de 14 : 80', 'Contre-latte, il y en a 86', 'Chevrons de 4 mètres : 2']
 };
 function canCount() { return isPatron() || !!D().invEnCours; }
@@ -368,6 +368,7 @@ SCREENS.voix = function (p) {
   var html = '<div class="screen vx' + (rec ? ' rec' : '') + (think ? ' think' : '') + '">' +
     '<div class="vx-top"><button class="vx-x" data-a="vxClose" aria-label="Fermer">' + ic('x') + '</button><b>Parle à l\'appli</b><span></span></div>' +
     (!VX.append && canCount() ? '<div class="vx-seg' + (rec || think ? ' off' : '') + '"><button class="' + (VX.mode === 'mvt' ? 'on' : '') + '" data-a="vxMode" data-m="mvt">Entrées / sorties</button><button class="' + (VX.mode === 'inv' ? 'on' : '') + '" data-a="vxMode" data-m="inv">Recomptage</button></div>' : '<div style="height:12px"></div>') +
+    (VX.ch && window.chNom && chNom(VX.ch) ? '<div class="vx-ch">' + ic('casque') + '<span>Pour le chantier <b>' + esc(chNom(VX.ch)) + '</b></span></div>' : '') +
     '<div class="vx-center"><button id="vxMic" class="vx-mic" data-a="vxToggle" aria-label="' + (rec ? 'Arrêter' : 'Parler') + '"' + (think ? ' disabled' : '') + '>' +
     '<i class="h h3"></i><i class="h h2"></i><i class="h h1"></i><span class="core">' + (think ? '<i class="vx-spin"></i>' : ic(rec ? 'stop' : 'mic')) + '</span></button>' +
     '<div class="vx-title">' + title + '</div><div class="vx-sub">' + sub + '</div>' +
@@ -409,13 +410,14 @@ A.vxToggle = function () {
   VX.st = 'think'; render(false);
   livePrepare(voiceName()).catch(function () {});      // la voix se connecte pendant que Gemini réfléchit
   var t0 = Date.now();
-  call('voix', [CFG.code, { audio: r.data, mime: 'audio/wav', mode: VX.mode, ctx: voixCtx(), avant: VX.append && VOX ? VOX.transcription || '' : '' }], 120000).then(function (doc) {
+  call('voix', [CFG.code, { audio: r.data, mime: 'audio/wav', mode: VX.mode, ctx: voixCtx(), avant: VX.append && VOX ? VOX.transcription || '' : '', chantierImpose: VX.ch && window.chNom ? chNom(VX.ch) : '' }], 120000).then(function (doc) {
     VX.said = doc.transcription || '';
     var lignes = doc.lignes || [];
     if (!lignes.length) { lignes = doc.lignes = derniersParLaVoix(VX.said); if (lignes.length) doc.reponse = 'Je supprime ' + (lignes.length > 1 ? 'les ' + lignes.length + ' derniers mouvements' : 'le dernier mouvement') + '. Vérifie, puis valide.'; }
     if (!lignes.length) { lignes = doc.lignes = phraseLocale(VX.said); if (lignes.length) doc.reponse = 'Voilà ce que j\'ai trouvé. Vérifie, puis valide.'; }
     if (lignes.length) doc.comprehensible = true;
-    if (!doc.comprehensible || !lignes.length) {
+    var repChantier = VX.append && VOX && (String(doc.chantier || '').trim() || (VOX.chCands || []).length);   // il répond juste « lequel » pour le chantier
+    if ((!doc.comprehensible || !lignes.length) && !repChantier) {
       VX.st = 'err'; VX.err = VX.said ? 'Je n\'ai pas trouvé de produit dans ta phrase. Redis-la avec la quantité et le nom du produit (« retire 195 crochets de gouttière »).' :
         'Je n\'ai rien compris de clair. Réécoute ton enregistrement ci-dessous : si le son est mauvais, coupe le Bluetooth ou parle plus près du téléphone.';
       render(false); speak(PHRASE_REPETE, { fixe: true });
@@ -423,6 +425,8 @@ A.vxToggle = function () {
     }
     var nv = buildVox(doc);
     preciser(nv);
+    refusSalarie(nv);
+    chVox(nv, VX.ch);
     if (VX.append && VOX) {
       var pend = VOX.lignes.filter(function (l) { return l.statut === 'check' && l.ambigu; })[0], ch = pend ? choisirParLaVoix(pend, VX.said) : '';
       if (ch) {                                                    // il a répondu « lequel » : on choisit, et on reprend ce qu'il demande en plus
@@ -436,6 +440,9 @@ A.vxToggle = function () {
       var base = VOX.lignes.length;
       nv.lignes.forEach(function (l, i) { l.k = 'l' + (base + i); VOX.lignes.push(l); });
       if (!VOX.four && nv.four) VOX.four = nv.four;
+      if (VOX.chCands && VOX.chCands.length) { var chx = chChoisirVoix(VOX.chCands, VX.said); if (chx) { VOX.chId = chx; VOX.chCands = []; } }
+      if (!VOX.chId && !VOX.chNew && (nv.chId || nv.chNew || (nv.chCands || []).length)) { VOX.chId = nv.chId; VOX.chNew = nv.chNew; VOX.chCands = nv.chCands; VOX.chantier = nv.chantier; }
+      if (nv.retour) VOX.retour = true;
       if (!VOX.chantier && nv.chantier) VOX.chantier = nv.chantier;
       VOX.confirmation = nv.confirmation || VOX.confirmation;
       VOX.reponse = composeReponse(VOX);
@@ -461,20 +468,21 @@ function buildVox(doc) {
   var ok = function (id) { return id && M.prod[id] && M.prod[id].actif !== '0' ? id : ''; };
   var four = doc.fournisseur_id && M.four[doc.fournisseur_id] && M.four[doc.fournisseur_id].actif !== '0' ? doc.fournisseur_id : (doc.fournisseur ? matchFour({ fournisseur: doc.fournisseur }) : '');
   var lignes = (doc.lignes || []).map(function (l, i) {
-    var op = ['sortie', 'compte', 'info', 'commander', 'supprimer', 'dupliquer'].indexOf(l.action) >= 0 ? l.action : 'entree';
+    var op = ['sortie', 'compte', 'info', 'commander', 'supprimer', 'dupliquer', 'bilan'].indexOf(l.action) >= 0 ? l.action : 'entree';
     var L = { k: 'l' + i, op: op, qte: Math.abs(num(l.quantite)), dit: String(l.dit || '').trim(), pid: '', cands: [], statut: 'new',
       nom: upName(l.nom_propose || l.dit), famille: M.fam[l.famille_proposee] ? l.famille_proposee : (M.fams[0] ? M.fams[0].id : ''), source: '' };
     if (!(L.qte >= 0) || (op !== 'compte' && op !== 'info' && !L.qte)) L.qte = op === 'compte' || op === 'info' ? 0 : 1;
     var al = M.alias[voxKey(L.dit)], pid = ok(l.produit_id), others = (l.autres_ids || []).map(ok).filter(Boolean);
     L.gpid = pid; L.gconf = num(l.confiance);
     if (op === 'supprimer' || op === 'dupliquer') return mvLine(L, l.mouvement_id, pid);
+    if (op === 'bilan') { L.statut = 'ok'; L.qte = 0; return L; }
     if (al && ok(al.produit) && vMatch(L.dit).length < 2) { L.pid = al.produit; L.statut = 'ok'; L.source = 'appris'; }
     else if (pid && num(l.confiance) >= 0.8) { L.pid = pid; L.statut = 'ok'; }
     else if (pid) { L.statut = 'check'; L.cands = [pid].concat(others.filter(function (x) { return x !== pid; })).slice(0, 3); }
     else { L.statut = 'new'; L.cands = others.slice(0, 2); }
     return L;
   });
-  return { source: 'voix', mode: VX.mode, four: four, fourNom: String(doc.fournisseur || '').trim(), chantier: String(doc.chantier || '').trim(),
+  return { source: 'voix', mode: VX.mode, four: four, fourNom: String(doc.fournisseur || '').trim(), chantier: String(doc.chantier || '').trim(), retour: !!doc.retour,
     transcription: String(doc.transcription || ''), reponse: String(doc.reponse || ''), confirmation: String(doc.confirmation || 'C\'est noté !'), lignes: lignes };
 }
 /* ================= V3.3 : assistant précis — ce qu'il DIT = ce qu'il MONTRE ================= */
@@ -537,7 +545,7 @@ function vMatchT(T) {
 function preciser(V) {
   var M = D();
   V.lignes.forEach(function (L) {
-    if (L.op === 'supprimer' || L.op === 'dupliquer' || L.statut === 'create' || L.choisi) return;
+    if (L.op === 'supprimer' || L.op === 'dupliquer' || L.op === 'bilan' || L.statut === 'create' || L.choisi) return;
     var T = vMotsDits(L.dit, V.transcription), m = vMatchT(T), g = L.gpid && M.prod[L.gpid] ? L.gpid : '';
     if (!m.length && g) {                                     // un mot dit n'est dans aucun nom (« bande de solin grise ») : on garde ceux du produit de Gemini
       var gt = vTokens(M.prod[g].nom), Tg = T.filter(function (t) { return vTokMatch(t, gt); });
@@ -555,6 +563,58 @@ function preciser(V) {
     if (i0 >= 0) L.dit = mots.slice(i0, i1 + 1).filter(function (w, k) { return garde[i0 + k] !== 0; }).join(' ');   // ce qu'il a vraiment dit (« bande de solin »)
     L.pid = ''; L.statut = 'check'; L.cands = ids.slice(0, 8); L.allCands = L.cands.slice(); L.ambigu = true; L.source = ''; L.nbTrouves = ids.length;
   });
+}
+/* ---------- V3.7 : chantiers dans la voix ---------- */
+/** Un salarié ne corrige pas le stock (sauf pendant un recomptage lancé par Jimmy), comme à la main. */
+function refusSalarie(V) {
+  if (isPatron() || (V.mode === 'inv' && D().invEnCours)) return;
+  V.lignes.forEach(function (l) { if (l.op === 'compte' && l.statut !== 'skip') { l.statut = 'refus'; l.refusCompte = true; } });
+}
+/** Les chantiers dont le nom porte les mots dits (« Martin » → MARTIN, MARTIN LADON). */
+function chTrouverVoix(nom) {
+  if (!window.CH) return [];
+  var R = CH(), k = chNorm(nom); if (!k) return [];
+  var T = vTokens(k).filter(function (t) { return t !== 'chantier' && t !== 'monsieur' && t !== 'madame' && t !== 'mr' && t !== 'mme'; });
+  var ex = R.byNom[k];
+  if (!T.length) return ex ? [ex] : [];
+  var m = R.list.filter(function (c) { var ct = vTokens(c.nom); return T.every(function (t) { return vTokMatch(t, ct) || ct.some(function (x) { return vTokMatch(x, [t]); }); }); })
+    .sort(function (a, b) { return ((b === ex) - (a === ex)) || (chFini(a) - chFini(b)) || (chDernier(a) < chDernier(b) ? 1 : -1); });
+  if (ex && m.indexOf(ex) < 0) m.unshift(ex);
+  return m;
+}
+function chBesoin(V) { return V.retour || V.lignes.some(function (l) { return (l.op === 'sortie' || l.op === 'bilan') && l.statut !== 'skip'; }); }
+/** Le chantier de la phrase : connu → pris ; plusieurs → il choisit ; inconnu → créé en validant (pas pour une simple question). */
+function chVox(V, preset) {
+  V.chId = ''; V.chCands = []; V.chNew = '';
+  if (!window.CH) return;
+  var dit = V.chantier || (V.lignes.filter(function (l) { return l.op === 'bilan'; })[0] || {}).dit || '';
+  var m = dit ? chTrouverVoix(dit) : [];
+  if (preset && CH().by[preset] && !(m.length === 1 && m[0].id !== preset)) { V.chId = preset; V.chantier = chNom(preset); return; }
+  if (!dit || !chBesoin(V)) return;
+  if (m.length === 1) { V.chId = m[0].id; return; }
+  if (m.length > 1) { V.chCands = m.slice(0, 6).map(function (c) { return c.id; }); return; }
+  if (V.lignes.some(function (l) { return l.op === 'sortie' || l.op === 'entree'; })) V.chNew = dit.replace(/^chantier\s+/i, '').trim();
+  else V.chInconnu = dit;
+}
+/** Il répond « Martin Ladon », « le deuxième »… pour le chantier. */
+function chChoisirVoix(cands, t) {
+  var n = norm(t || ''), ord = [/premi/, /(deuxi|second)/, /troisi/, /quatri/, /cinqui/];
+  for (var i = 0; i < ord.length; i++) if (ord[i].test(n) && cands[i]) return cands[i];
+  if (/dernier/.test(n)) return cands[cands.length - 1];
+  var m = chTrouverVoix(t).filter(function (c) { return cands.indexOf(c.id) >= 0; });
+  if (m.length === 1) return m[0].id;
+  var sc = cands.map(function (id) { var ct = vTokens(chNom(id)); return vTokens(t).filter(function (w) { return w.length > 2 && vTokMatch(w, ct); }).length; }), max = Math.max.apply(null, sc);
+  return max > 0 && sc.filter(function (x) { return x === max; }).length === 1 ? cands[sc.indexOf(max)] : '';
+}
+function chNomVox(V) { return (V.chId ? chNom(V.chId) : V.chNew || '').replace(/^chantier\s+/i, ''); }
+/** « Sur le chantier Martin, il est parti 12 bastings de 4 m, 4 bandes de rive et 3 autres produits, pour 845 euros HT. » */
+function chBilanPhrase(id) {
+  var M = D(), b = chBilan(id), nom = chNom(id).replace(/^chantier\s+/i, ''), l = b.lignes.filter(function (x) { return x.net > 0; });
+  if (!l.length) return 'Rien n\'est encore sorti pour le chantier ' + nom + '.';
+  l = l.slice().sort(function (a, c) { return c.net - a.net; });
+  var noms = l.slice(0, 3).map(function (x) { var p = M.prod[x.pid]; return fq(x.net) + ' ' + (p ? p.nom.replace(/\s*\(.*?\)\s*/g, ' ').trim().toLowerCase() : 'produit'); });
+  if (l.length > 3) noms.push((l.length - 3) + ' autre' + (l.length > 4 ? 's' : '') + ' produit' + (l.length > 4 ? 's' : ''));
+  return 'Sur le chantier ' + nom + ', il est parti ' + vEt(noms) + (isPatron() && b.total ? ', pour ' + Math.round(b.total) + ' euros HT' : '') + '.';
 }
 /** Ce qui distingue chaque produit des autres (« Ø25 0,52 », « anglaise galva Ø65 1×10 »). */
 function vLabels(ids, dit) {
@@ -586,9 +646,10 @@ function vEt(a) { return a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') +
     Ordre : d'abord ce qui est fait (ordres directs), puis les réponses aux questions, puis ce qu'il doit choisir, puis ce qui est inconnu. */
 function composeReponse(V) {
   var M = D(), L = V.lignes.filter(function (l) { return l.statut !== 'skip' && l.statut !== 'refus'; });
-  if (!L.length) return 'Il ne reste rien à faire.';
+  if (!L.length) return V.lignes.some(function (l) { return l.refusCompte && l.statut === 'refus'; }) ? 'Seul Jimmy peut corriger le stock : demande-lui, ou attends un recomptage.' : 'Il ne reste rien à faire.';
   var pret = function (l) { return l.statut === 'ok' || l.statut === 'create'; };
-  var act = L.filter(function (l) { return pret(l) && l.op !== 'info'; }), info = L.filter(function (l) { return pret(l) && l.op === 'info'; });
+  var act = L.filter(function (l) { return pret(l) && l.op !== 'info' && l.op !== 'bilan'; }), info = L.filter(function (l) { return pret(l) && l.op === 'info'; });
+  var bil = L.filter(function (l) { return l.op === 'bilan'; }), chn = chNomVox(V);
   var amb = L.filter(function (l) { return l.statut === 'check' && l.ambigu; }), chk = L.filter(function (l) { return l.statut === 'check' && !l.ambigu; });
   var nw = L.filter(function (l) { return l.statut === 'new'; });
   var out = [];
@@ -596,13 +657,16 @@ function composeReponse(V) {
   if (act.length > 3) out.push('J\'ai noté ' + act.length + ' mouvements.');
   else if (act.length) out.push(act.map(function (l) {
     var nom = vNom(l), q = fq(l.qte);
-    if (l.op === 'sortie') return q + ' ' + nom + ' en moins' + (V.chantier ? ' pour ' + V.chantier : '');
-    if (l.op === 'entree') return q + ' ' + nom + ' en plus';
+    if (l.op === 'sortie') return q + ' ' + nom + ' en moins';
+    if (l.op === 'entree') return q + ' ' + nom + (V.retour ? ' de retour' : ' en plus');
     if (l.op === 'compte') return nom + ' : je mets le stock à ' + q;
     if (l.op === 'commander') return q + ' ' + nom + ' en commande';
     var m = mvById(l.mid);
     return (l.op === 'supprimer' ? 'je supprime ' : 'je refais ') + (m ? ({ entree: 'l\'entrée', sortie: 'la sortie', ajust: 'la correction' }[m.type] || 'le mouvement') + ' de ' + fq(Math.abs(num(m.delta))) + ' ' + nom : 'ce mouvement');
-  }).reduce(function (acc, x, i, all) { return acc + (i ? (i === all.length - 1 ? ' et ' : ', ') : '') + x; }, '').replace(/^./, function (c) { return c.toUpperCase(); }) + '.');
+  }).reduce(function (acc, x, i, all) { return acc + (i ? (i === all.length - 1 ? ' et ' : ', ') : '') + x; }, '').replace(/^./, function (c) { return c.toUpperCase(); }) +
+    (chn && act.some(function (l) { return l.op === 'sortie'; }) ? ' pour le chantier ' + chn : chn && V.retour && act.some(function (l) { return l.op === 'entree'; }) ? ' du chantier ' + chn : '') + '.');
+  if (V.chId) bil.forEach(function () { out.push(chBilanPhrase(V.chId)); });
+  else if (bil.length && V.chInconnu) out.push('Je ne trouve pas de chantier ' + V.chInconnu + '.');
   // 2) réponses aux questions (« Il te reste 2 bandes de solin et 3 bandes de rive. Tu n'as plus de volige 18. »)
   var oui = info.filter(function (l) { return (M.stock[l.pid] || 0) > 0; }), non = info.filter(function (l) { return !((M.stock[l.pid] || 0) > 0); });
   if (oui.length) out.push('Il te reste ' + vEt(oui.map(function (l) { return fq(M.stock[l.pid]) + ' ' + vNom(l); })) + '.');
@@ -622,7 +686,13 @@ function composeReponse(V) {
   if (nw.length === 1) out.push(nw[0].op === 'info' ? 'Je n\'ai pas de ' + nw[0].nom.toLowerCase() + ' dans le stock. Je le crée ?' : 'Je ne connais pas ' + nw[0].nom.toLowerCase() + ' : je le crée ?');
   else if (nw.length > 1) out.push('Je ne connais pas ' + vEt(nw.map(function (l) { return l.nom.toLowerCase(); })) + ' : je les crée ?');
   // 5) la suite
-  var questions = amb.length + chk.length + nw.length;
+  // le chantier
+  var chq = 0;
+  if (V.chCands && V.chCands.length) { chq = 1; out.push('Pour le chantier, j\'ai trouvé ' + vListe(V.chCands.slice(0, 4).map(chNom)) + ' : lequel ?'); }
+  else if (V.chNew) { chq = 1; out.push('Le chantier ' + V.chNew + ' est nouveau : je le crée ?'); }
+  else if (V.retour && !V.chId && act.some(function (l) { return l.op === 'entree'; })) { chq = 1; out.push('Ça revient de quel chantier ?'); }
+  if (L.some(function (l) { return l.refusCompte; }) || V.lignes.some(function (l) { return l.refusCompte && l.statut === 'refus'; })) out.push('Seul Jimmy peut corriger le stock.');
+  var questions = amb.length + chk.length + nw.length + chq;
   if (!questions) {
     if (!act.length && info.length === 1) {
       var e = M.etat[info[0].pid];
@@ -696,24 +766,30 @@ function mvLine(L, mid, pid) {
   return L;
 }
 function voxLine(k) { return VOX && VOX.lignes.filter(function (l) { return l.k === k; })[0]; }
-function voxPending() { return VOX ? VOX.lignes.filter(function (l) { return l.statut === 'check' || l.statut === 'new'; }).length : 0; }
-var OPS = { entree: { s: '+', lab: 'Entrée', cls: 'in' }, sortie: { s: '−', lab: 'Sortie', cls: 'out' }, compte: { s: '=', lab: 'Recomptage', cls: 'adj' },
+function voxPending() {
+  if (!VOX) return 0;
+  var n = VOX.lignes.filter(function (l) { return l.statut === 'check' || l.statut === 'new'; }).length;
+  if (VOX.chCands && VOX.chCands.length) n++;
+  else if (VOX.retour && !VOX.chId && !VOX.chNew && VOX.lignes.some(function (l) { return l.op === 'entree' && l.statut !== 'skip'; })) n++;
+  return n;
+}
+var OPS = { bilan: { s: '', lab: 'Chantier', cls: 'info' }, entree: { s: '+', lab: 'Entrée', cls: 'in' }, sortie: { s: '−', lab: 'Sortie', cls: 'out' }, compte: { s: '=', lab: 'Recomptage', cls: 'adj' },
   info: { s: '?', lab: 'Stock', cls: 'info' }, commander: { s: '🛒', lab: 'À commander', cls: 'cmd' },
   supprimer: { s: '✕', lab: 'Supprimer', cls: 'del' }, dupliquer: { s: '×2', lab: 'Refaire', cls: 'dup' } };
 function voxAfter(l, q) {
   if (l.op === 'supprimer' || l.op === 'dupliquer') { var m = mvById(l.mid), d = m ? num(m.delta) : 0; return l.op === 'supprimer' ? q - d : q + d; }
-  if (l.op === 'info' || l.op === 'commander') return q;
+  if (l.op === 'info' || l.op === 'commander' || l.op === 'bilan') return q;
   return l.op === 'entree' ? q + l.qte : l.op === 'sortie' ? q - l.qte : l.qte;
 }
 
 SCREENS.voixVerif = function () {
   if (!VOX) return SCREENS.voix({});
   var M = D(), V = VOX;
-  var nOk = V.lignes.filter(function (l) { return (l.statut === 'ok' || l.statut === 'create') && l.op !== 'info'; }).length, left = voxPending();
-  var queInfo = !nOk && !left && V.lignes.some(function (l) { return l.op === 'info' && l.statut === 'ok'; });
+  var nOk = V.lignes.filter(function (l) { return (l.statut === 'ok' || l.statut === 'create') && l.op !== 'info' && l.op !== 'bilan'; }).length, left = voxPending();
+  var queInfo = !nOk && !left && V.lignes.some(function (l) { return (l.op === 'info' || l.op === 'bilan') && l.statut === 'ok'; });
   var hasIn = V.lignes.some(function (l) { return l.op === 'entree' && l.statut !== 'skip'; });
   var html = '<div class="screen">' + head({ title: 'Voilà ce que j\'ai compris', backAct: 'voxBack',
-    sub: esc([V.four ? 'Livraison ' + fourName(V.four) : '', V.chantier ? 'Chantier ' + V.chantier : ''].filter(Boolean).join(' · ')) }) +
+    sub: esc([V.four && !V.retour ? 'Livraison ' + fourName(V.four) : '', chNomVox(V) ? (V.retour ? 'Retour du chantier ' : 'Chantier ') + chNomVox(V) : ''].filter(Boolean).join(' · ')) }) +
     '<div class="scroll nonav" style="padding-bottom:180px">';
   html += '<div class="say" id="vxSay" data-s=""><div class="say-top"><span class="wave">' + '<i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>' + '</span><span class="say-lab">à voix haute</span>' +
     '<button class="small-btn" data-a="voxReplay">' + ic('replay') + 'Réécouter</button></div>' +
@@ -724,6 +800,7 @@ SCREENS.voixVerif = function () {
       '<span class="vq check">Il n\'est pas dans ta liste.</span><div class="btn-row"><button class="btn light" style="height:46px" data-a="voxFourNew">Ajouter</button><button class="btn light" style="height:46px" data-a="voxFourPick">Choisir</button></div>' +
       '<div class="vmini"><button data-a="voxFourNone">Sans fournisseur</button></div></div>';
   }
+  html += voxChCarte(V);
   var order = { check: 0, new: 1, create: 2, ok: 3, refus: 4, skip: 5 };
   V.lignes.slice().sort(function (a, b) { return order[a.statut] - order[b.statut]; }).forEach(function (l) {
     var o = OPS[l.op], said = '<span class="vsrc">Tu as dit : <b>' + esc(l.dit) + '</b> · ' + o.lab.toLowerCase() + ' ' + o.s + ' ' + fq(l.qte) + '</span>';
@@ -732,7 +809,7 @@ SCREENS.voixVerif = function () {
         (l.cands.length ? l.cands.map(function (id) { var m = mvById(id), pr = m && M.prod[m.produit]; return m ? '<button class="vcand" data-a="voxPickMv" data-k="' + l.k + '" data-id="' + id + '">' + esc(pr ? pr.nom : '?') + ' <span>· ' + esc(mvDesc(m)) + '</span></button>' : ''; }).join('') : '<span class="vsrc">Aucun mouvement récent trouvé.</span>') +
         '<div class="vmini"><button data-a="voxSkip" data-k="' + l.k + '">Retirer</button></div></div>';
     } else if (l.statut === 'refus') {
-      html += '<div class="vcard skip"><span class="vsrc"><b>' + esc(l.dit) + '</b> : tu ne peux supprimer que tes propres mouvements de moins de 24 h (demande à Jimmy).</span><button class="link" data-a="voxSkip" data-k="' + l.k + '">OK</button></div>';
+      html += '<div class="vcard skip"><span class="vsrc"><b>' + esc(l.dit) + '</b> : ' + (l.refusCompte ? 'seul Jimmy peut corriger le stock (sauf pendant un recomptage).' : 'tu ne peux supprimer que tes propres mouvements de moins de 24 h (demande à Jimmy).') + '</span><button class="link" data-a="voxSkip" data-k="' + l.k + '">OK</button></div>';
     } else if (l.statut === 'check') {
       html += '<div class="vcard check"><div class="vhead"><span class="dot check"></span>' + said + '</div><span class="vq check">' + (l.ambigu ? 'J\'ai trouvé ' + l.cands.length + ' produits : ' + (vFeminin(l.dit) ? 'laquelle' : 'lequel') + ' ?' : 'Je pense que c\'est :') + '</span>' +
         l.cands.map(function (pid, i) { return '<button class="vcand ' + (i === 0 ? 'best' : '') + '" data-a="voxPick" data-k="' + l.k + '" data-id="' + pid + '">' + esc(M.prod[pid].nom) + ' <span>· stock ' + fq(M.stock[pid] || 0) + '</span></button>'; }).join('') +
@@ -745,6 +822,8 @@ SCREENS.voixVerif = function () {
         '<div class="vmini"><button data-a="voxSkip" data-k="' + l.k + '">Retirer cette ligne</button></div></div>';
     } else if (l.statut === 'skip') {
       html += '<div class="vcard skip"><span class="vsrc">Retirée : <b>' + esc(l.dit) + '</b></span><button class="link" data-a="voxUnskip" data-k="' + l.k + '">Reprendre</button></div>';
+    } else if (l.op === 'bilan') {
+      html += voxBilanCarte(V, l);
     } else if (l.op === 'info' && l.statut === 'ok') {
       var pi = M.prod[l.pid], qi = M.stock[l.pid] || 0, si = num(pi.seuil), ci = M.cmd[l.pid];
       html += '<div class="vcard ok vx-info"><div class="vxi-top"><span class="grow"><span class="t">' + esc(pi.nom) + '</span><span class="s">' + (si > 0 ? 'seuil ' + fq(si) + ' · ' : '') + esc(fourName(pi.four) || '') + '</span></span>' +
@@ -756,14 +835,14 @@ SCREENS.voixVerif = function () {
     } else {
       var p = l.statut === 'create' ? { nom: l.nom } : M.prod[l.pid], q = l.statut === 'create' ? 0 : (M.stock[l.pid] || 0);
       var mvm = l.mid ? mvById(l.mid) : null;
-      var info = mvm ? o.lab + ' : ' + mvDesc(mvm) : [o.lab, l.op === 'entree' && V.four ? fourName(V.four) : '', l.op === 'sortie' && V.chantier ? 'Chantier ' + V.chantier : '', l.source === 'appris' ? 'reconnu (déjà dit)' : ''].filter(Boolean).join(' · ');
+      var info = mvm ? o.lab + ' : ' + mvDesc(mvm) : [l.op === 'entree' && V.retour ? 'Retour de chantier' : o.lab, l.op === 'entree' && V.four && !V.retour ? fourName(V.four) : '', (l.op === 'sortie' || (l.op === 'entree' && V.retour)) && chNomVox(V) ? chNomVox(V) : '', l.source === 'appris' ? 'reconnu (déjà dit)' : ''].filter(Boolean).join(' · ');
       if (l.op === 'commander') info = 'À commander · ajouté à la liste, le stock ne change pas';
       html += '<button class="vcard ok vxl" data-a="voxMenu" data-k="' + l.k + '"><span class="vxq ' + o.cls + '">' + (mvm ? o.s : l.op === 'commander' ? '+' + fq(l.qte) : o.s + fq(l.qte)) + '</span><span class="grow"><span class="t">' + esc(p ? p.nom : '?') +
         (l.statut === 'create' ? ' <span class="badge" style="background:#DCE6FF;color:#1E3A8A">nouveau</span>' : '') + '</span>' +
         '<span class="s">' + esc(info) + ' · stock ' + fq(q) + ' → ' + fq(voxAfter(l, q)) + '</span></span></button>';
     }
   });
-  if (V.lignes.some(function (l) { return l.statut === 'ok'; })) html += '<p style="text-align:center;font-size:13px;color:var(--muted);margin:6px 0 0">Touche une ligne pour la corriger ou la retirer</p>';
+  if (V.lignes.some(function (l) { return l.statut === 'ok' && l.op !== 'bilan'; })) html += '<p style="text-align:center;font-size:13px;color:var(--muted);margin:6px 0 0">Touche une ligne pour la corriger ou la retirer</p>';
   html += '<button class="btn light" style="margin-top:14px" data-a="voxCancel">' + ic('trash') + 'Tout annuler</button></div>' +
     '<div class="bottom-bar"><div style="text-align:center;font-size:14px;font-weight:600;margin-bottom:8px;color:' + (left ? '#7A3D00' : 'var(--green-ink)') + '">' +
     (left ? 'Encore ' + left + ' point' + (left > 1 ? 's' : '') + ' à regarder' : queInfo ? 'Rien n\'est modifié dans le stock' : nOk + ' ligne' + (nOk > 1 ? 's' : '') + ' prête' + (nOk > 1 ? 's' : '')) + '</div>' +
@@ -772,6 +851,33 @@ SCREENS.voixVerif = function () {
     '<button class="btn green" style="height:62px;font-size:22px" data-a="voxValidate" ' + (left || !nOk ? 'disabled' : '') + '>Valider ' + (nOk > 1 ? 'les ' + nOk + ' lignes' : 'la ligne') + '</button>') + '</div></div></div>';
   return html;
 };
+/** Carte « chantier » en haut de la vérification. */
+function voxChCarte(V) {
+  if (!window.CH || !chBesoin(V)) return '';
+  if (V.chCands && V.chCands.length) return '<div class="vcard check"><div class="vhead"><span class="dot check"></span><span class="vsrc">Chantier dit : <b>' + esc(V.chantier) + '</b></span></div><span class="vq check">J\'ai trouvé ' + V.chCands.length + ' chantiers : lequel ?</span>' +
+    V.chCands.map(function (id, i) { var c = CH().by[id]; return '<button class="vcand ' + (i === 0 ? 'best' : '') + '" data-a="voxCh" data-id="' + id + '">' + esc(c.nom) + ' <span>· ' + esc(chDates(c) || 'sans date') + '</span></button>'; }).join('') +
+    '<div class="vmini"><button data-a="voxChAutre">Autre chantier…</button></div></div>';
+  if (V.chNew) return '<div class="vcard new"><div class="vhead"><span class="dot new"></span><span class="vsrc">Chantier dit : <b>' + esc(V.chantier || V.chNew) + '</b></span></div><span class="vq new">Nouveau chantier : il sera créé en validant.</span>' +
+    '<div class="vch-row">' + ic('casque') + '<b>' + esc(V.chNew) + '</b></div><div class="vmini"><button data-a="voxChAutre">C\'est un chantier existant</button><button data-a="voxChSans">Sans chantier</button></div></div>';
+  var aDesMv = V.retour || V.lignes.some(function (l) { return l.op === 'sortie' && l.statut !== 'skip'; });
+  if (V.chId && !aDesMv) return '';
+  if (V.chId) return '<button class="vcard ok vch" data-a="voxChAutre">' + ic('casque') + '<span class="grow"><span class="s">' + (V.retour ? 'Retour du chantier' : 'Chantier') + '</span><span class="t">' + esc(chNom(V.chId)) + '</span></span><span class="link">changer</span></button>';
+  if (V.retour) return '<div class="vcard check"><div class="vhead"><span class="dot check"></span><span class="vsrc">Retour de chantier</span></div><span class="vq check">De quel chantier ?</span><button class="btn light" style="height:48px" data-a="voxChAutre">Choisir le chantier</button></div>';
+  if (V.lignes.some(function (l) { return l.op === 'sortie' && l.statut !== 'skip'; })) return '<button class="vcard vch nochan" data-a="voxChAutre">' + ic('casque') + '<span class="grow"><span class="t">Pour un chantier ?</span><span class="s">facultatif · touche pour choisir</span></span>' + ic('chev') + '</button>';
+  return '';
+}
+function voxBilanCarte(V, l) {
+  if (!V.chId) return '<div class="vcard skip"><span class="vsrc">' + (V.chCands && V.chCands.length ? 'Choisis le chantier ci-dessus pour voir son bilan.' : 'Je ne trouve pas de chantier « ' + esc(V.chInconnu || l.dit) + ' ».') + '</span></div>';
+  var M = D(), b = chBilan(V.chId), c = CH().by[V.chId], lg = b.lignes.filter(function (x) { return x.net !== 0; });
+  return '<div class="vcard ok vx-bilan"><div class="vb-top"><span class="ch-ic">' + ic('casque') + '</span><div class="grow"><b>' + esc(c.nom) + '</b><span>' + esc(chDates(c) || 'sans date') + '</span></div>' +
+    (isPatron() ? '<div class="vb-tot"><b>' + fe(b.total) + '</b><span>HT</span></div>' : '') + '</div>' +
+    (lg.length ? '<div class="vb-l">' + lg.slice(0, 6).map(function (x) { var p = M.prod[x.pid]; return '<div><b>' + fq(x.net) + '</b><span>' + esc(p ? p.nom : '?') + '</span></div>'; }).join('') + (lg.length > 6 ? '<div class="more">+ ' + (lg.length - 6) + ' autres</div>' : '') + '</div>' : '<span class="vsrc">Rien n\'est encore sorti pour ce chantier.</span>') +
+    '<button class="btn light" style="height:46px;margin-top:8px" data-a="voxChOuvrir" data-id="' + c.id + '">Ouvrir le chantier</button></div>';
+}
+A.voxCh = function (d) { VOX.chId = d.id; VOX.chCands = []; VOX.chNew = ''; VOX.chInconnu = ''; saveVox(); voxDire(); render(false); };
+A.voxChAutre = function () { chChoix({ titre: VOX.retour ? 'Retour de quel chantier ?' : 'Quel chantier ?', ok: function (id) { A.voxCh({ id: id }); } }); };
+A.voxChSans = function () { VOX.chId = ''; VOX.chCands = []; VOX.chNew = ''; VOX.chantier = ''; saveVox(); voxDire(); render(false); };
+A.voxChOuvrir = function (d) { stopSpeak(); VOX = null; saveVox(); go('chantier', { id: d.id }, { replace: true }); };
 function voxSet(k, fn) { var l = voxLine(k); if (!l) return; fn(l); saveVox(); render(false); }
 A.voxReplay = function () { audioCtx(); if (VOX) speak(VOX.reponse); };
 /** Ce que le téléphone sait déjà (catalogue, stock, fournisseurs, familles) : envoyé avec la voix, le script n'a plus à lire le Sheet. */
@@ -781,6 +887,7 @@ function voixCtx() {
     catalogue: M.prods.map(function (p) { return p.id + ' | ' + upName(p.nom) + ' | ' + p.famille + ' | ' + round3(M.stock[p.id] || 0) + ' | ' + (p.four && M.four[p.four] ? M.four[p.four].nom : '') + ' | ' + (num(p.seuil) > 0 ? round3(num(p.seuil)) : ''); }).join('\n'),
     fournisseurs: M.foursActifs.map(function (f) { return f.id + ' | ' + f.nom; }).join('\n'),
     familles: M.fams.map(function (f) { return f.id + ' | ' + f.nom; }).join('\n'),
+    chantiers: window.CH ? CH().list.slice().sort(function (a, b) { return (chFini(a) - chFini(b)) || (chDernier(a) < chDernier(b) ? 1 : -1); }).slice(0, 80).map(function (c) { return c.nom + (chFini(c) ? ' (terminé)' : ''); }).join('\n') : '',
     mouvements: M.moves.filter(function (m) { return m.type !== 'depart'; }).slice(0, 30).map(function (m) {
       var pr = M.prod[m.produit], d = num(m.delta);
       return m.id + ' | ' + fdate(m.date) + ' | ' + ({ entree: 'entrée', sortie: 'sortie', ajust: 'correction' }[m.type] || m.type) + ' | ' + (d > 0 ? '+' : '−') + fq(Math.abs(d)) +
@@ -864,11 +971,12 @@ A.voxCancel = function () {
   });
 };
 A.voxToCmd = function (d) { A.voxInfoAct({ k: d.k, op: 'commander' }); };
-A.voxDone = function () { stopSpeak(); VOX = null; saveVox(); go('home', {}, { replace: true }); };
+A.voxDone = function () { stopSpeak(); VOX = null; saveVox(); if (VX && VX.ch && window.CH && CH().by[VX.ch]) go('chantier', { id: VX.ch }, { replace: true }); else go('home', {}, { replace: true }); };
 A.voxValidate = function () {
   audioCtx();
   var V = VOX, M = D(); if (!V || voxPending()) return;
   var now = nowIso(), ops = [], n = 0, inv = M.invEnCours;
+  var chId = V.chId && CH().by[V.chId] ? V.chId : (V.chNew && chBesoin(V) ? chCreer(V.chNew) : ''), chN = chId ? chNom(chId) : '';
   V.lignes.forEach(function (l) {
     if (l.statut !== 'ok' && l.statut !== 'create') return;
     var pid = l.pid;
@@ -880,13 +988,14 @@ A.voxValidate = function () {
     }
     if (l.statut === 'create') {
       pid = uid('p');
-      ops.push(put('Produits', { id: pid, nom: upName(l.nom), famille: l.famille, unite: '', seuil: '0', four: l.op === 'entree' && V.four ? V.four : '', ref: '', notes: '', actif: '1', cree: now }));
+      ops.push(put('Produits', { id: pid, nom: upName(l.nom), famille: l.famille, sfam: sfamDevinee(l.nom, l.famille), unite: '', seuil: '0', four: l.op === 'entree' && V.four ? V.four : '', ref: '', notes: '', actif: '1', cree: now }));
     }
     var q = l.statut === 'create' ? 0 : (M.stock[pid] || 0);
-    if (l.op === 'info') return;
+    if (l.op === 'info' || l.op === 'bilan') return;
     if (l.op === 'commander') { ops.push(cmdAdd(pid, l.qte)); n++; return; }
-    if (l.op === 'entree') ops.push(put('Mouvements', { id: uid('m'), date: now, produit: pid, delta: String(round3(l.qte)), type: 'entree', qui: ME, lieu: V.four ? 'Livraison (à la voix)' : 'À la voix', fournisseur: V.four || '', prix: '', note: 'voix' }));
-    else if (l.op === 'sortie') ops.push(put('Mouvements', { id: uid('m'), date: now, produit: pid, delta: String(-round3(l.qte)), type: 'sortie', qui: ME, lieu: V.chantier || 'À la voix', fournisseur: '', prix: '', note: 'voix' }));
+    if (l.op === 'entree' && V.retour && chId) ops.push(put('Mouvements', { id: uid('m'), date: now, produit: pid, delta: String(round3(l.qte)), type: 'entree', qui: ME, lieu: 'Retour de chantier', fournisseur: '', prix: '', note: 'voix', chantier: chId }));
+    else if (l.op === 'entree') ops.push(put('Mouvements', { id: uid('m'), date: now, produit: pid, delta: String(round3(l.qte)), type: 'entree', qui: ME, lieu: V.four ? 'Livraison (à la voix)' : 'À la voix', fournisseur: V.four || '', prix: '', note: 'voix' }));
+    else if (l.op === 'sortie') ops.push(put('Mouvements', { id: uid('m'), date: now, produit: pid, delta: String(-round3(l.qte)), type: 'sortie', qui: ME, lieu: chN || V.chantier || 'À la voix', fournisseur: '', prix: '', note: 'voix', chantier: chId }));
     else if (inv) ops.push(put('Comptages', { id: inv.id + '_' + pid, inventaire: inv.id, produit: pid, compte: String(l.qte), qui: ME, date: now }));
     else if (round3(l.qte - q) !== 0) ops.push(put('Mouvements', { id: uid('m'), date: now, produit: pid, delta: String(round3(l.qte - q)), type: 'ajust', qui: ME, lieu: 'Recomptage à la voix', fournisseur: '', prix: '', note: 'voix' }));
     if (l.dit && !l.ambigu && !l.choisi) ops.push(put('Alias', { id: 'a' + hashKey(voxKey(l.dit)), fournisseur: 'voix', libelle: voxKey(l.dit).slice(5), produit: pid, facteur: '1', maj: now }));
@@ -897,7 +1006,8 @@ A.voxValidate = function () {
   commit(ops);
   VOX = null; saveVox();
   toast('C\'est fait', n + ' ligne' + (n > 1 ? 's' : '') + (inv && V.mode === 'inv' ? ' comptée' + (n > 1 ? 's' : '') + ' dans le recomptage' : ' enregistrée' + (n > 1 ? 's' : '')));
-  AUD.garde = true; go('home', {}, { replace: true }); AUD.garde = false;
+  var retourCh = VX && VX.ch && CH().by[VX.ch] ? VX.ch : '';
+  AUD.garde = true; if (retourCh) go('chantier', { id: retourCh }, { replace: true }); else go('home', {}, { replace: true }); AUD.garde = false;
 };
 
 /* ================= Réglages : voix de l'appli ================= */
@@ -918,8 +1028,8 @@ A.voixPick = function (d) {
   if (grid) { [].forEach.call(document.querySelectorAll('.voix-grid button'), function (b) { b.classList.toggle('on', b.getAttribute('data-v') === d.v); b.classList.remove('load'); }); var me_ = document.querySelector('.voix-grid [data-v="' + d.v + '"]'); if (me_) me_.classList.add('load'); }
   speak(PHRASE_ESSAI, { fixe: true, voix: d.v });
 };
-A.vxOpen = function () {
-  audioCtx(); recCancel(); VX = { st: 'idle', mode: 'mvt', err: '', said: '', append: false }; go('voix', {});
+A.vxOpen = function (d) {
+  audioCtx(); recCancel(); VX = { st: 'idle', mode: 'mvt', err: '', said: '', append: false, ch: d && d.ch && window.CH && CH().by[d.ch] ? d.ch : '' }; go('voix', {});
   call('ping', [CFG.code], 15000).catch(function () {});        // réveille le script dès l'ouverture
   liveToken().catch(function () {});                            // jeton de voix prêt à l'avance
   prechargerOk();

@@ -1,12 +1,12 @@
 /* Stock Da Costa — données locales, synchronisation automatique, calculs */
 'use strict';
 
-var APP_VERSION = '3.6';
+var APP_VERSION = '3.11';
 window.STOCK_V2 = true;   // dit au filet de sécurité de config.js que cette version est à jour
 var CFG = window.STOCK_CONFIG || {};
 var IS_TEST = CFG.test === true;                       // version de test de Kevin (config.js : test: true)
 var NS = IS_TEST ? 'stock-test:' : 'stock:';            // mémoire du téléphone séparée entre test et officielle
-var TABLES = ['Reglages', 'Utilisateurs', 'Fournisseurs', 'Familles', 'Produits', 'Prix', 'Mouvements', 'Inventaires', 'Comptages', 'Factures', 'Alias'];
+var TABLES = ['Reglages', 'Utilisateurs', 'Fournisseurs', 'Familles', 'Produits', 'Prix', 'Mouvements', 'Inventaires', 'Comptages', 'Factures', 'Alias', 'Commande', 'Chantiers', 'SousFamilles'];
 
 var LS = {
   get: function (k, d) { try { var v = localStorage.getItem(NS + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -15,6 +15,8 @@ var LS = {
 };
 
 function uid(p) { return (p || '') + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+/** « 3.10 » est plus récent que « 3.4 » (comparaison nombre par nombre, pas en décimal). */
+function verAuMoins(v, min) { var a = String(v || '').split('.').map(Number), b = String(min).split('.').map(Number); for (var i = 0; i < Math.max(a.length, b.length); i++) { var x = a[i] || 0, y = b[i] || 0; if (x !== y) return x > y; } return true; }
 function num(v) { if (v === null || v === undefined || v === '') return 0; var n = parseFloat(String(v).replace(',', '.').replace(/\s/g, '')); return isFinite(n) ? n : 0; }
 function numOrNull(v) { if (v === null || v === undefined || String(v).trim() === '') return null; var n = parseFloat(String(v).replace(',', '.').replace(/\s/g, '')); return isFinite(n) ? n : null; }
 function round3(n) { return Math.round(n * 1000) / 1000; }
@@ -191,6 +193,15 @@ function dropRejected() { REJECTED = []; saveLocal(); notifySync(); }
 var MEMO = { v: -1 };
 var collator = typeof Intl !== 'undefined' ? new Intl.Collator('fr', { sensitivity: 'base', numeric: true }) : null;
 function cmp(a, b) { return collator ? collator.compare(a, b) : (a < b ? -1 : a > b ? 1 : 0); }
+/** V3.11 : sous-famille devinée d'après le nom (« VIS CHARPENTE… » → Vis), parmi celles de la famille. */
+function sfamDevinee(nom, fam) {
+  var n = ' ' + norm(nom).replace(/[^a-z0-9]+/g, ' ') + ' ', l = (D().sfamsDe[fam] || []);
+  for (var i = 0; i < l.length; i++) {
+    var b = norm(l[i].nom).replace(/[^a-z0-9]+/g, ' ').trim(), c = [b, b.replace(/[sx]$/, '')].filter(function (x) { return x.length >= 3; });
+    if (c.some(function (x) { return n.indexOf(' ' + x + ' ') >= 0 || n.indexOf(' ' + x + 's ') >= 0 || n.indexOf(' ' + x + 'x ') >= 0; })) return l[i].id;
+  }
+  return '';
+}
 function norm(s) { return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ø/g, 'o').replace(/×/g, 'x'); }
 
 function D() {
@@ -207,6 +218,9 @@ function D() {
   M.fams = vals('Familles').sort(function (a, b) { return num(a.ordre) - num(b.ordre) || cmp(a.nom, b.nom); });
   M.fam = {}; M.fams.forEach(function (f) { M.fam[f.id] = f; });
   M.famOrder = {}; M.fams.forEach(function (f, i) { M.famOrder[f.id] = i; });
+  // V3.11 : sous-familles (ex. Clous & vis › Vis), gérées par Jimmy
+  M.sfams = vals('SousFamilles').filter(function (x) { return x.actif !== '0'; }).sort(function (a, b) { return num(a.ordre) - num(b.ordre) || cmp(a.nom, b.nom); });
+  M.sfam = {}; M.sfamsDe = {}; M.sfams.forEach(function (x) { M.sfam[x.id] = x; (M.sfamsDe[x.famille] = M.sfamsDe[x.famille] || []).push(x); });
   M.allProds = vals('Produits');
   M.prod = {}; M.allProds.forEach(function (p) { M.prod[p.id] = p; });
   M.prods = M.allProds.filter(function (p) { return p.actif !== '0'; }).sort(function (a, b) { return cmp(a.nom, b.nom); });
@@ -292,6 +306,13 @@ function fq(n) {
   var s = Math.abs(n % 1) < 1e-9 ? String(Math.round(n)) : String(Math.round(n * 100) / 100).replace('.', ',');
   return s.replace('-', '−');
 }
+/** Prix à l'unité : jusqu'à 4 décimales pour les petites pièces (vis à 0,0191 €). */
+function fePu(n) {
+  if (n === null || n === undefined || isNaN(n)) return '';
+  var a = Math.abs(n), d = a > 0 && a < 1 ? (a < 0.1 ? 4 : 3) : 2;
+  return Number(n).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: d });
+}
+function rnd5(x) { return Math.round(x * 1e5) / 1e5; }
 function fe(n) {
   if (n === null || n === undefined) return '';
   return Number(n).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 });
