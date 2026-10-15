@@ -162,9 +162,12 @@ function pill(p) {
   return '<span class="pill ' + (e === 'ok' ? '' : e) + '">' + fq(q) + (p.unite ? '<small>' + esc(p.unite) + '</small>' : '') + '</span>';
 }
 /** V3.13 : produit compté en boîtes (« (BOÎTE 100) » dans le nom) → unité « boîtes » et nombre de pièces à côté. */
-function boiteDe(p) { return typeof tailleBoite === 'function' && p ? tailleBoite(p.nom) : 0; }
+/* V3.14 (retour de Jimmy) : le contenu d'une boîte est un champ de la fiche (colonne Produits.boite), pas le nom :
+   le nom reste celui de la facture. Les anciens noms « (BOÎTE 100) » (inventaire papier) restent compris. */
+function boiteDe(p) { if (!p) return 0; var b = num(p.boite); if (b > 0 && /^(bo[iî]te|paquet|rouleau)/i.test(p.unite || 'boîte')) return b; return typeof tailleBoite === 'function' ? tailleBoite(p.nom) : 0; }
+function contenuU(p) { return /^rouleau/i.test(p && p.unite || '') ? 'kg' : 'pièces'; }
 function uniteDe(p, q) { var u = p && p.unite || ''; if (boiteDe(p) > 1 && (!u || /^bo[iî]te/i.test(u))) return 'boîte' + (Math.abs(q) > 1 ? 's' : ''); return u; }
-function piecesDe(p, q) { var n = boiteDe(p); return n > 1 && q ? fq(round3(q * n)) + ' pièces' : ''; }
+function piecesDe(p, q) { var n = boiteDe(p); return n > 0 && q ? fq(round3(q * n)) + ' ' + contenuU(p) : ''; }
 function prodSub(p) {
   var M = D(), e = M.etat[p.id], s = [famSf(p)];
   if (piecesDe(p, M.stock[p.id] || 0)) s.push(piecesDe(p, M.stock[p.id] || 0));
@@ -638,7 +641,7 @@ SCREENS.prod = function (p) {
     (inCmd ? '<u data-a="cmdOut" data-id="' + pr.id + '">retirer</u>' : '') + '</button></div></div></div>' +
     '<div class="scroll" style="padding-top:0"><div class="card">' +
     (pr.ref ? '<div class="kv"><span>Référence</span><span>' + esc(pr.ref) + '</span></div>' : '') +
-    (pr.unite ? '<div class="kv"><span>Compté en</span><span>' + esc(pr.unite) + '</span></div>' : '') +
+    (pr.unite || boiteDe(pr) ? '<div class="kv"><span>Compté en</span><span>' + esc((pr.unite || 'boîte') + (boiteDe(pr) ? ' de ' + fq(boiteDe(pr)) + ' ' + contenuU(pr) : '')) + '</span></div>' : '') +
     (pr.notes ? '<div class="kv"><span>Notes</span><span style="white-space:pre-line">' + esc(pr.notes) + '</span></div>' : '') + '</div>';
   html += '<div class="sec-title"><span>Fournisseurs' + (patron ? ' et prix' : '') + '</span>' + (patron ? '<button class="link" data-a="editProd">Modifier</button>' : '') + '</div><div class="card" style="padding-top:4px;padding-bottom:4px">' +
     (prix.length ? prix.map(function (x) {
@@ -730,7 +733,7 @@ function editForm(id) {
   var lines = (M.prix[id] || []).map(function (x) { return { id: x.id, fournisseur: x.fournisseur, prix: numOrNull(x.prix) === null ? '' : fq(x.prix), ref: x.ref || '', main: x.fournisseur === p.four, orig: x.prix }; });
   if (!lines.length) lines.push({ id: '', fournisseur: p.four || '', prix: '', ref: '', main: true });
   if (!lines.some(function (l) { return l.main; })) lines[0].main = true;
-  return { isNew: false, id: id, nom: p.nom, famille: p.famille, sfam: p.sfam || '', unite: p.unite || '', seuil: num(p.seuil), ref: p.ref || '', notes: p.notes || '', lines: lines };
+  return { isNew: false, id: id, nom: p.nom, famille: p.famille, sfam: p.sfam || '', unite: p.unite || '', boite: num(p.boite) > 0 ? fq(num(p.boite)) : '', boiteAvant: num(p.boite), uniteAvant: p.unite || '', seuil: num(p.seuil), ref: p.ref || '', notes: p.notes || '', lines: lines };
 }
 var UNITES = ['pièce', 'mètre', 'ml', 'm²', 'boîte', 'paquet', 'rouleau', 'kg', 'botte', 'litre'];
 SCREENS.edit = function (p) {
@@ -745,6 +748,9 @@ SCREENS.edit = function (p) {
       '<button class="chip" data-a="newSfam" data-f="' + f.famille + '">+ Nouvelle</button></div></div>' : '') +
     '<div class="field"><span class="flabel">Compté en</span><div class="chips wrap"><button class="chip ' + (!f.unite ? 'on' : '') + '" data-a="fSet" data-k="unite" data-v="">—</button>' +
     UNITES.concat(f.unite && UNITES.indexOf(f.unite) < 0 ? [f.unite] : []).map(function (u) { return '<button class="chip ' + (f.unite === u ? 'on' : '') + '" data-a="fSet" data-k="unite" data-v="' + esc(u) + '">' + esc(u) + '</button>'; }).join('') + '</div></div>' +
+    (/^(bo[iî]te|paquet|rouleau)$/i.test(f.unite || '') ? '<div class="field"><label for="fboite">' + (/^rouleau/i.test(f.unite) ? 'Poids d\'un rouleau (kg)' : 'Combien de pièces dans ' + (/^paquet/i.test(f.unite) ? 'un paquet' : 'une boîte') + ' ?') +
+      ' <span class="help">(facultatif)</span></label><input id="fboite" class="inp" inputmode="decimal" data-i="f" data-k="boite" autocomplete="off" placeholder="' + (/^rouleau/i.test(f.unite) ? 'ex. 10' : 'ex. 100, 250, 500') + '" value="' + esc(f.boite || '') + '">' +
+      '<span class="help">Le stock et le prix restent ' + (/^rouleau/i.test(f.unite) ? 'au rouleau' : 'à la boîte') + ' ; le Bilan donne aussi ' + (/^rouleau/i.test(f.unite) ? 'les kilos' : 'le nombre de pièces') + '. Pas besoin de l\'écrire dans le nom.</span></div>' : '') +
     '<div style="display:grid;grid-template-columns:' + (f.isNew ? '1fr 1fr' : '1fr') + ';gap:10px;margin-bottom:16px">' +
     (f.isNew ? '<div class="card" style="margin:0;display:flex;flex-direction:column;align-items:center;gap:8px"><span class="flabel" style="text-align:center">Quantité en stock</span>' + stepper('fstep', 'qte', f.qte, 'Saisir la quantité') + '</div>' : '') +
     '<div class="card" style="margin:0;display:flex;flex-direction:column;align-items:center;gap:8px"><span class="flabel" style="text-align:center">Alerte à partir de</span>' + stepper('fstep', 'seuil', f.seuil, 'Saisir le seuil') +
@@ -816,7 +822,9 @@ A.saveProd = function () {
   var dup = M.prods.filter(function (p) { return p.id !== id && norm(p.nom) === norm(nom); })[0];
   var save = function () {
     var sf = M.sfam[f.sfam] && M.sfam[f.sfam].famille === f.famille ? f.sfam : (f.isNew ? sfamDevinee(nom, f.famille) : '');
-    var ops = [put('Produits', { id: id, nom: nom, famille: f.famille || '', sfam: sf, unite: f.unite || '', seuil: String(num(f.seuil)), four: main ? main.fournisseur : '', ref: (f.ref || '').trim(), notes: (f.notes || '').trim(), actif: '1' })];
+    var bx = /^(bo[iî]te|paquet|rouleau)$/i.test(f.unite || '') && numOrNull(f.boite) > 0 ? String(numOrNull(f.boite)) : '';
+    var ops = [put('Produits', { id: id, nom: nom, famille: f.famille || '', sfam: sf, unite: f.unite || '', boite: bx, seuil: String(num(f.seuil)), four: main ? main.fournisseur : '', ref: (f.ref || '').trim(), notes: (f.notes || '').trim(), actif: '1' })];
+    if (f.conv > 1) ops = ops.concat(opsEnBoites(id, f.conv, true));   // V3.14 : stock compté à la pièce → converti en boîtes
     if (f.isNew) {
       ops[0].row.cree = nowIso();
       if (num(f.qte) > 0) ops.push(put('Mouvements', { id: uid('m'), date: nowIso(), produit: id, delta: String(num(f.qte)), type: 'depart', qui: ME, lieu: 'Stock de départ', fournisseur: '', prix: '', note: '' }));
@@ -827,6 +835,7 @@ A.saveProd = function () {
       var pv = numOrNull(l.prix), lid = l.id || uid('x');
       keep[lid] = 1;
       var old = l.id ? DB.Prix[l.id] : null;
+      if (f.conv > 1 && old && pv !== null && Math.abs(numOrNull(old.prix) - pv) < 1e-9) pv = rnd5(pv * f.conv);   // prix à la pièce inchangé → prix de la boîte
       var changed = !old || numOrNull(old.prix) !== pv || old.fournisseur !== l.fournisseur;
       ops.push(put('Prix', { id: lid, produit: id, fournisseur: l.fournisseur, prix: pv === null ? '' : String(pv), ref: (l.ref || '').trim(), maj: changed && pv !== null ? nowIso() : (old ? old.maj : '') }));
     });
@@ -835,6 +844,12 @@ A.saveProd = function () {
     toast(f.isNew ? 'Produit ajouté' : 'Produit enregistré', nom);
     if (f.isNew) go('prod', { id: id }, { replace: true }); else back();
   };
+  // V3.14 : un produit compté à la pièce passe en boîtes de n → proposer de convertir le stock (300 pièces → 0,6 boîte de 500)
+  var nb = numOrNull(f.boite), q0 = M.stock[id] || 0;
+  if (!f.isNew && !f.conv && /^(bo[iî]te|paquet)$/i.test(f.unite || '') && nb > 1 && !/^(bo[iî]te|paquet)$/i.test(f.uniteAvant || '') && boiteDe(M.prod[id]) <= 1 && q0) {
+    ask({ title: 'Convertir le stock en boîtes ?', text: 'Le stock actuel est compté à la pièce : ' + fq(q0) + '. En boîtes de ' + fq(nb) + ', ça fait ' + fq(round3(q0 / nb)) + ' boîte' + (q0 / nb > 1 ? 's' : '') + '. L\'historique et les prix sont convertis aussi, la valeur ne change pas.', ok: 'Convertir', no: 'Ne rien convertir' }).then(function (ok) { if (ok) f.conv = nb; save(); });
+    return;
+  }
   if (dup && f.isNew) ask({ title: 'Ce produit existe déjà ?', text: '« ' + esc(dup.nom) + ' » est déjà dans le stock. L\'ajouter quand même ?', ok: 'Ajouter quand même' }).then(function (ok) { if (ok) save(); });
   else save();
 };

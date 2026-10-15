@@ -42,7 +42,8 @@ function blFiltre(p) {
 function blRetour(m) { return m.type === 'entree' && (!!m.chantier || norm(m.lieu) === 'retour de chantier'); }
 /** Quantité « parlante » : un produit vendu par boîte de 100 compte 100 pièces par boîte. */
 function blUnite(pr, q) {
-  var n = typeof tailleBoite === 'function' ? tailleBoite(pr.nom) : 0;
+  var n = typeof boiteDe === 'function' ? boiteDe(pr) : 0;
+  if (n > 0 && /^rouleau/i.test(pr.unite || '')) return { u: 'kg', q: q * n, b: 0, n: n };
   if (n > 1) return { u: 'pièces', q: q * n, b: q, n: n };
   return { u: pr.unite || 'u', q: q };
 }

@@ -304,15 +304,22 @@ function nomAvecBoite(nom, n) { return tailleBoite(nom) === n ? nom : nomSansBoi
 function rangerComme(L, choix, n) {
   var c = L.cond || {};
   L.condChoix = choix;
-  if (choix === 'boite') { L.facteur = c.n === n && c.f === 1 ? 1 : 1 / n; L.condN = n; L.uStock = 'boîte'; L.nom = nomAvecBoite(L.nom, n); }
-  else if (choix === 'piece') { L.facteur = c.mode === 'boite' && c.f === 1 ? c.n : 1; L.condN = 0; L.uStock = ''; L.nom = nomSansBoite(L.nom); }
+  // V3.14 (Jimmy) : le nom reste celui de la facture ; la taille de la boîte va dans la fiche (Produits.boite)
+  var tn = tailleBoite(L.nom);
+  if (choix === 'boite') { L.facteur = c.n === n && c.f === 1 ? 1 : 1 / n; L.condN = n; L.uStock = 'boîte'; if (tn && tn !== n) L.nom = nomSansBoite(L.nom); }
+  else if (choix === 'piece') { L.facteur = c.mode === 'boite' && c.f === 1 ? c.n : 1; L.condN = 0; L.uStock = ''; if (tn) L.nom = nomSansBoite(L.nom); }
   else if (choix === 'kg') { L.facteur = 1; L.condN = 0; L.uStock = 'kg'; }
-  else if (choix === 'rouleau') { L.facteur = 1 / n; L.condN = n; L.uStock = 'rouleau'; L.nom = nomSansBoite(L.nom).replace(/\s*\(ROULEAU[^)]*\)/i, '') + ' (ROULEAU ' + fq(n) + ' KG)'; }
+  else if (choix === 'rouleau') { L.facteur = 1 / n; L.condN = n; L.uStock = 'rouleau'; }
 }
 /** Carte « produit compté à la pièce, la facture parle de boîtes ». */
 function condAlerte(l, p, al) {
   var c = l.cond || {}, n = al.n, nb = c.f === 1 ? l.qte : l.qte / n, np = c.f === 1 ? l.qte * n : l.qte, stk = D().stock[l.pid] || 0;
   var pb = l.prix !== null ? (c.f === 1 ? l.prix : l.prix * n) : null;
+  if (al.sansTaille) return '<div class="valerte vprix"><div class="vp-t">Combien de pièces dans une boîte ?</div>' +
+    '<p>Ce produit est compté en boîtes, mais sa fiche ne dit pas combien il y a de pièces dans une boîte. Sur la facture : <b>' + fq(np) + ' pièces</b>' + (pb !== null ? ' à ' + fePu(l.prix) + ' la pièce' : '') + '.</p></div>' +
+    '<button class="btn vp-b" data-a="vConv" data-v="oui" data-k="' + l.k + '"><b>+ ' + fq(round3(nb)) + ' boîte' + (nb > 1 ? 's' : '') + ' de ' + fq(n) + '</b><span>la fiche retiendra « boîte de ' + fq(n) + ' »</span></button>' +
+    '<button class="btn light vp-b" data-a="vCond" data-v="autre" data-k="' + l.k + '"><b>Des boîtes d\'une autre taille…</b><span>ex. 1 boîte de ' + fq(np) + '</span></button>' +
+    '<div class="vmini"><button data-a="vQty" data-k="' + l.k + '">Modifier la quantité…</button><button data-a="vOther" data-k="' + l.k + '">Autre produit…</button><button data-a="vToNew" data-k="' + l.k + '">C\'est un nouveau</button></div>';
   return '<div class="valerte vprix"><div class="vp-t">Ce produit est compté à la pièce</div>' +
     '<p>Sur la facture : <b>' + fq(round3(nb)) + ' boîte' + (nb > 1 ? 's' : '') + ' de ' + fq(n) + '</b> (' + fq(np) + ' pièces)' + (pb !== null ? ', soit <b>' + fePu(pb) + ' la boîte</b>' : '') + '.</p>' +
     '<p>Tu achètes ce produit en boîtes : le compter en boîtes est plus simple (stock, sorties, inventaire). Le Bilan donnera toujours aussi le nombre de pièces.</p>' +
@@ -337,15 +344,17 @@ function condNouveau(L) {
 /** Ligne rapprochée d'un produit EXISTANT compté à la pièce alors que la facture parle de boîtes : proposer de le passer en boîtes (patron). */
 function condControle(L) {
   if (L.statut !== 'ok' || !L.pid || L.alerteOk || L.facteur !== 1 || !isPatron()) return false;
-  var p = D().prod[L.pid], c = L.cond; if (!p || !c || c.mode !== 'boite' || tailleBoite(p.nom) > 1 || p.compte === 'piece') return false;
-  L.alerte = { type: 'cond', n: c.n }; L.statut = 'check'; L.cands = [L.pid]; return true;
+  var p = D().prod[L.pid], c = L.cond; if (!p || !c || c.mode !== 'boite' || boiteDe(p) > 1 || p.compte === 'piece') return false;
+  var sansTaille = /^(bo[iî]te|paquet)/i.test(p.unite || '');      // compté en boîtes, mais la fiche ne dit pas combien de pièces dedans
+  if (sansTaille && c.f === 1) return false;                         // la facture compte déjà en boîtes : rien à demander
+  L.alerte = { type: 'cond', n: c.n, sansTaille: sansTaille }; L.statut = 'check'; L.cands = [L.pid]; return true;
 }
 A.vCond = function (d) {
   var l = vLine(d.k); if (!l) return;
   if (d.v === 'autre' || d.v === 'rouleau') {
     askNumber({ title: d.v === 'rouleau' ? 'Un rouleau pèse combien de kilos ?' : 'Combien de pièces dans une boîte ?', text: d.v === 'rouleau' ? 'Regarde l\'étiquette d\'un rouleau. L\'appli comptera ce produit en rouleaux.' : 'Regarde sur la boîte. L\'appli comptera ce produit en boîtes.', value: d.v === 'rouleau' ? undefined : (l.condN || (l.cond && l.cond.n) || 100) }).then(function (n) {
       if (!(n > 0)) return;
-      vSet(d.k, function (x) { if (x.statut === 'check' && x.alerte && x.alerte.type === 'cond') { x.convertir = n; x.condN = n; x.facteur = x.cond && x.cond.f === 1 ? 1 : 1 / n; x.uStock = 'boîte'; x.statut = 'ok'; x.alerte = null; x.alerteOk = true; } else rangerComme(x, d.v === 'rouleau' ? 'rouleau' : 'boite', n); });
+      vSet(d.k, function (x) { if (x.statut === 'check' && x.alerte && x.alerte.type === 'cond') { if (x.alerte.sansTaille) x.fixeBoite = n; else x.convertir = n; x.condN = n; x.facteur = x.cond && x.cond.f === 1 ? 1 : 1 / n; x.uStock = 'boîte'; x.statut = 'ok'; x.alerte = null; x.alerteOk = true; } else rangerComme(x, d.v === 'rouleau' ? 'rouleau' : 'boite', n); });
     });
     return;
   }
@@ -355,18 +364,18 @@ A.vCond = function (d) {
 A.vConv = function (d) {
   vSet(d.k, function (l) {
     var c = l.cond || {}, n = l.alerte && l.alerte.n || c.n;
-    if (d.v === 'oui') { l.convertir = n; l.facteur = c.f === 1 ? 1 : 1 / n; l.uStock = 'boîte'; }
+    if (d.v === 'oui' && l.alerte && l.alerte.sansTaille) { l.fixeBoite = n; l.facteur = c.f === 1 ? 1 : 1 / n; l.uStock = 'boîte'; l.condN = n; }
+    else if (d.v === 'oui') { l.convertir = n; l.facteur = c.f === 1 ? 1 : 1 / n; l.uStock = 'boîte'; l.condN = n; }
     else { l.gardePiece = true; l.facteur = c.f === 1 ? n : 1; }
     l.statut = 'ok'; l.alerte = null; l.alerteOk = true;
   });
 };
 /** Opérations pour passer un produit compté à la pièce en boîtes de n : nom, unité, seuil, tout l'historique (quantités ÷ n, prix × n),
     prix des fournisseurs, conversions apprises et commande. Le stock garde exactement la même valeur. */
-function opsEnBoites(pid, n) {
+function opsEnBoites(pid, n, sansFiche) {
   var M = D(), p = M.prod[pid], ops = []; if (!p || !(n > 1)) return ops;
   var r3 = function (x) { return String(round3(x)); };
-  var row = { id: pid, nom: nomAvecBoite(p.nom, n), unite: 'boîte' }; if (num(p.seuil) > 0) row.seuil = r3(Math.max(1, num(p.seuil) / n));
-  ops.push(put('Produits', row));
+  if (!sansFiche) { var row = { id: pid, unite: 'boîte', boite: String(n) }; if (num(p.seuil) > 0) row.seuil = r3(Math.max(1, num(p.seuil) / n)); ops.push(put('Produits', row)); }
   (M.movesBy[pid] || []).forEach(function (m) {
     var r = { id: m.id, delta: r3(num(m.delta) / n) };
     if (numOrNull(m.prix) !== null) r.prix = String(rnd5(num(m.prix) * n));
@@ -381,7 +390,7 @@ function opsEnBoites(pid, n) {
 /** Texte « 5 boîtes de 100 » / « 500 pièces » / « 23,5 kg » pour une ligne. */
 function rangeTxt(l) {
   var q = l.qte * l.facteur;
-  if (l.uStock === 'boîte' || (l.statut === 'ok' && l.pid && tailleBoite((D().prod[l.pid] || {}).nom) > 1 && l.facteur !== 1)) { var n = l.condN || l.convertir || Math.round(1 / l.facteur) || tailleBoite((D().prod[l.pid] || {}).nom); return fq(round3(q)) + ' boîte' + (q > 1 ? 's' : '') + (n > 1 ? ' de ' + fq(n) : ''); }
+  if (l.uStock === 'boîte' || (l.statut === 'ok' && l.pid && boiteDe(D().prod[l.pid]) > 1 && l.facteur !== 1)) { var n = l.condN || l.convertir || boiteDe(D().prod[l.pid]) || Math.round(1 / l.facteur); return fq(round3(q)) + ' boîte' + (q > 1 ? 's' : '') + (n > 1 ? ' de ' + fq(n) : ''); }
   if (l.uStock === 'rouleau') return fq(round3(q)) + ' rouleau' + (q > 1 ? 'x' : '') + ' de ' + fq(l.condN) + ' kg';
   if (l.uStock === 'kg') return fq(q) + ' kg';
   return fq(q) + (l.cond && l.cond.mode === 'boite' ? ' pièce' + (q > 1 ? 's' : '') : '');
@@ -424,7 +433,7 @@ function unAutreFournisseur(L, four) {
 function vControle(L) {
   if (L.statut !== 'ok' || !L.pid || L.alerteOk) return;
   var M = D(), p = M.prod[L.pid]; if (!p) return;
-  var n = tailleBoite(p.nom), nf = tailleBoite(L.libelle);
+  var n = boiteDe(p), nf = tailleBoite(L.libelle);
   if (n > 1 && L.facteur === 1 && nf !== n && L.qte >= n / 2) {   // le stock compte des boîtes de n, la facture des pièces
     L.alerte = { type: 'unite', n: n }; L.statut = 'check'; L.cands = [L.pid]; return;
   }
@@ -478,7 +487,8 @@ function buildVerif(doc) {
   var lignes = (doc.lignes || []).map(function (l, i) {
     var qte = num(l.quantite) || 1, prix = numOrNull(l.prix_unitaire_ht), mt = numOrNull(l.montant_ht), corr = false;
     // V3.8 : le MONTANT de la ligne fait foi (prix « au cent » ou « au mille » : 500 vis × 1,91 €/100 = 9,55 €)
-    if (mt !== null && mt > 0 && qte > 0) { var pm = mt / qte; if (prix === null || Math.abs(prix - pm) > Math.max(0.005, pm * 0.05)) { corr = prix !== null; prix = pm; } }
+    // V3.14 : toujours le montant ÷ quantité quand le montant est lu (le prix de la boîte retombe juste : 250 × 0,0329 = 8,225 ≠ 8,23)
+    if (mt !== null && mt > 0 && qte > 0) { var pm = mt / qte; if (prix === null || Math.abs(prix - pm) > Math.max(0.005, pm * 0.05)) corr = prix !== null; prix = pm; }
     if (prix !== null) prix = rnd5(prix);
     var L = { k: 'l' + i, libelle: String(l.libelle || '').trim(), ref: String(l.reference || '').trim(), qte: qte, unite: String(l.unite || '').trim(),
       prix: prix, facteur: num(l.conditionnement) > 0 ? num(l.conditionnement) : 1, pid: '', cands: [], statut: 'new',
@@ -547,8 +557,9 @@ SCREENS.verif = function () {
       html += '<div class="vcard check"><div class="vhead"><span class="dot check"></span>' + src + '</div>' +
         '<span class="vq check">' + esc(pa ? pa.nom : '?') + '</span>' +
         (al.type === 'cond' ? condAlerte(l, pa, al) : al.type === 'unite' ? '<div class="valerte">Ce produit est compté <b>par boîte de ' + al.n + '</b>, la facture compte <b>' + fq(l.qte) + ' pièces</b>.</div>' +
-          '<button class="btn" style="height:48px;font-size:16px;font-family:Barlow;font-weight:700" data-a="vUnite" data-k="' + l.k + '">Oui : + ' + fq(round3(l.qte / al.n)) + ' boîte' + (l.qte / al.n > 1 ? 's' : '') + ' de ' + al.n + '</button>' +
-          '<div class="vmini"><button data-a="vAlerteOk" data-k="' + l.k + '">Garder + ' + fq(l.qte) + '</button><button data-a="vOther" data-k="' + l.k + '">Autre produit…</button><button data-a="vToNew" data-k="' + l.k + '">C\'est un nouveau</button></div>'
+          '<button class="btn vp-b" data-a="vUnite" data-k="' + l.k + '"><b>+ ' + fq(round3(l.qte / al.n)) + ' boîte' + (l.qte / al.n > 1 ? 's' : '') + ' de ' + al.n + '</b><span>les ' + fq(l.qte) + ' pièces de la facture rangées en boîtes (conseillé)</span></button>' +
+          '<button class="btn light vp-b" data-a="vAlerteOk" data-k="' + l.k + '"><b>+ ' + fq(l.qte) + ' boîtes</b><span>seulement si la facture compte déjà en boîtes</span></button>' +
+          '<div class="vmini"><button data-a="vQty" data-k="' + l.k + '">Autre quantité…</button><button data-a="vOther" data-k="' + l.k + '">Autre produit…</button><button data-a="vToNew" data-k="' + l.k + '">C\'est un nouveau (autre taille)</button></div>'
         : prixAlerte(l, pa, al)) + '</div>';
     } else if (l.statut === 'check') {
       html += '<div class="vcard check"><div class="vhead"><span class="dot check"></span>' + src + '</div><span class="vq check">Je pense que c\'est :</span>' +
@@ -567,7 +578,7 @@ SCREENS.verif = function () {
       var q = l.statut === 'create' ? 0 : (M.stock[l.pid] || 0);
       html += '<button class="vcard ok" data-a="vLineMenu" data-k="' + l.k + '"><span class="dot ' + (l.statut === 'create' ? 'new' : 'ok') + '"></span><span class="grow"><span class="t">' + esc(p ? p.nom : '?') +
         (l.statut === 'create' ? ' <span class="badge" style="background:#DCE6FF;color:#1E3A8A">nouveau</span>' : '') + '</span>' +
-        '<span class="s">' + (l.source === 'appris' ? 'reconnu (déjà vu) · ' : l.source === 'réf.' ? 'reconnu par la réf. · ' : '') + 'Facture : ' + esc(l.libelle) + (l.facteur !== 1 ? ' · ' + fq(l.qte) + ' × ' + fq(l.facteur) : '') +
+        '<span class="s">' + (l.source === 'appris' ? 'reconnu (déjà vu) · ' : l.source === 'réf.' ? 'reconnu par la réf. · ' : '') + 'Facture : ' + esc(l.libelle) + (l.facteur !== 1 ? ' · ' + fq(l.qte) + (l.unite ? ' ' + esc(l.unite) : '') + ' → ' + esc(rangeTxt(l)) : '') +
         (l.convertir > 1 ? ' · <b>passe en boîtes de ' + fq(l.convertir) + '</b>' : '') +
         (l.statut === 'create' ? '' : ' · stock ' + fq(round3(l.convertir > 1 ? q / l.convertir : q)) + ' → ' + fq(round3((l.convertir > 1 ? q / l.convertir : q) + l.qte * l.facteur))) + '</span></span>' +
         '<span class="vqty"><b>+' + fq(round3(l.qte * l.facteur)) + '</b>' + (l.uStock === 'boîte' || l.convertir > 1 ? '<span>boîte' + (l.qte * l.facteur > 1 ? 's' : '') + '</span>' : l.uStock ? '<span>' + esc(l.uStock) + '</span>' : '') + (l.prix !== null ? '<span>' + fePu(l.prix / l.facteur) + '</span>' : '') + '</span></button>';
@@ -610,22 +621,35 @@ A.vLineMenu = function (d) {
 A.vChange = function (d) { closeSheet(function () { A.vOther(d); }); };
 A.vRename = function (d) { closeSheet(function () { A.vName(d); }); };
 A.vSkipSheet = function (d) { closeSheet(function () { A.vSkip(d); }); };
+/** V3.14 (retour de Jimmy : « plus on corrigeait, plus le nombre de boîtes augmentait ») : plus de coefficient à taper.
+    On dit simplement ce qui ENTRE EN STOCK, dans l'unité du stock (boîtes, pièces…), et le prix pour 1 de cette unité ; l'appli calcule le reste. */
+function uStockLigne(l) {
+  var p = l.pid ? D().prod[l.pid] : null;
+  if (l.uStock === 'boîte' || l.convertir > 1 || l.fixeBoite > 1 || (p && boiteDe(p) > 1 && l.facteur !== 1) || (p && /^bo[iî]te/i.test(p.unite || ''))) return 'boîte';
+  if (l.uStock) return l.uStock;
+  return (p && p.unite) || 'pièce';
+}
 A.vQty = function (d) {
-  var l = vLine(d.k), p = D().prod[l.pid], u = (p && p.unite) || 'unités';
+  var l = vLine(d.k), u = uStockLigne(l), q = round3(l.qte * l.facteur), pu = l.prix !== null ? rnd5(l.prix / l.facteur) : null;
+  var pl = function (x) { return /^(bo[iî]te|pièce|rouleau)$/.test(x) ? x + 's' : x; };
   closeSheet(function () {
-    openSheet('<h3>Quantité</h3><p>Sur la facture : ' + esc(l.libelle) + ' · ' + fq(l.qte) + (l.unite ? ' ' + esc(l.unite) : '') + '</p>' +
-      '<div class="field"><label for="vq">Quantité facturée</label><input id="vq" class="inp" inputmode="decimal" value="' + fq(l.qte).replace('−', '-') + '"></div>' +
-      '<div class="field"><label for="vf">1 ' + esc(l.unite || 'unité facturée') + ' = combien de ' + esc(u) + ' dans le stock ?</label><input id="vf" class="inp" inputmode="decimal" value="' + fq(l.facteur) + '">' +
-      '<span class="help">Ex. 10 pour un paquet de 10 si tu comptes à la pièce, 0,01 pour 100 pièces si tu comptes par boîte de 100. Retenu pour les prochaines factures.</span></div>' +
-      (isPatron() ? '<div class="field"><label for="vp">Prix HT pour 1 ' + esc(l.unite || 'unité facturée') + '</label><input id="vp" class="inp" inputmode="decimal" value="' + (l.prix !== null ? String(l.prix).replace('.', ',') : '') + '">' +
-        (l.montant ? '<span class="help">Montant de la ligne sur la facture : ' + fe(l.montant) + ' pour ' + fq(l.qte) + '.</span>' : '') + '</div>' : '') +
+    openSheet('<h3>Ce qui entre en stock</h3><p>Sur la facture : <b>' + esc(l.libelle) + '</b> · ' + fq(l.qte) + (l.unite ? ' ' + esc(l.unite) : '') + (l.montant ? ' · ligne ' + fe(l.montant) + ' HT' : '') + '</p>' +
+      '<div class="field"><label for="vq">Combien de <b>' + esc(pl(u)) + '</b> entrent en stock ?</label><input id="vq" class="inp" inputmode="decimal" value="' + fq(q).replace('−', '-') + '">' +
+      (u === 'boîte' ? '<span class="help">Ex. une seule boîte de ' + fq(l.qte) + ' pièces : tape 1.</span>' : '') + '</div>' +
+      (isPatron() ? '<div class="field"><label for="vp">Prix HT pour 1 ' + esc(u) + '</label><input id="vp" class="inp" inputmode="decimal" value="' + (pu !== null ? String(pu).replace('.', ',') : '') + '">' +
+        '<span class="help" id="vqcalc">' + (l.montant ? 'Montant de la ligne sur la facture : ' + fe(l.montant) + '.' : '') + '</span></div>' : '') +
       '<button class="btn" data-a="vQtyOk" data-k="' + l.k + '">OK</button>');
   });
 };
 A.vQtyOk = function (d) {
-  var q = numOrNull(document.getElementById('vq').value), f = numOrNull(document.getElementById('vf').value), vp = document.getElementById('vp'), pr = vp ? numOrNull(vp.value) : null;
+  var q = numOrNull(document.getElementById('vq').value), vp = document.getElementById('vp');
+  var pr = vp && vp.value !== vp.defaultValue ? numOrNull(vp.value) : null;      // prix non retouché : le prix de la facture reste (le prix de la boîte suit la quantité)
   closeSheet(function () { vSet(d.k, function (l) {
-    if (q !== null && q > 0) l.qte = q; if (f !== null && f > 0) l.facteur = f; if (pr !== null && pr >= 0) l.prix = rnd5(pr);
+    if (q !== null && q > 0) {
+      l.facteur = rnd5(q / l.qte) || l.facteur;                       // stock = quantité facturée × facteur
+      if (l.uStock === 'boîte' && l.facteur > 0) l.condN = round3(1 / l.facteur);
+    }
+    if (pr !== null && pr >= 0) l.prix = rnd5(pr * l.facteur);       // prix pour 1 unité du stock → prix pour 1 unité facturée
     if (l.alerte) { l.statut = 'ok'; l.alerte = null; l.alerteOk = true; }   // corrigé à la main : on lui fait confiance
   }); });
 };
@@ -691,10 +715,11 @@ A.vValidate = function () {
     if (l.statut !== 'ok' && l.statut !== 'create') return;
     var pid = l.pid, unitPrice = l.prix !== null ? rnd5(l.prix / l.facteur) : null;
     if (l.convertir > 1) ops = ops.concat(opsEnBoites(pid, l.convertir));          // V3.13 : produit passé en boîtes
-    if (l.gardePiece) ops.push(put('Produits', { id: pid, compte: 'piece' }));       // ne plus le proposer pour ce produit
+    if (l.gardePiece) ops.push(put('Produits', { id: pid, compte: 'piece' }));
+    if (l.fixeBoite > 1) ops.push(put('Produits', { id: pid, boite: String(l.fixeBoite) }));   // V3.14 : la fiche retient la taille de la boîte       // ne plus le proposer pour ce produit
     if (l.statut === 'create') {
       pid = uid('p');
-      ops.push(put('Produits', { id: pid, nom: upName(l.nom), famille: l.famille, sfam: sfamDevinee(l.nom, l.famille), unite: l.uStock || '', seuil: '0', four: four, ref: '', notes: '', actif: '1', cree: now }));
+      ops.push(put('Produits', { id: pid, nom: upName(l.nom), famille: l.famille, sfam: sfamDevinee(l.nom, l.famille), unite: l.uStock || '', boite: (l.uStock === 'boîte' || l.uStock === 'rouleau') && l.condN ? String(l.condN) : '', seuil: '0', four: four, ref: '', notes: '', actif: '1', cree: now }));
     } else if (M.prod[pid] && !M.prod[pid].four) ops.push(put('Produits', { id: pid, four: four }));
     ops.push(put('Mouvements', { id: uid('m'), date: now, produit: pid, delta: String(round3(l.qte * l.facteur)), type: 'entree', qui: ME, lieu: lab, fournisseur: four, prix: unitPrice === null ? '' : String(unitPrice), note: fid }));
     var ex = (M.prix[pid] || []).filter(function (x) { return x.fournisseur === four; })[0];
@@ -926,3 +951,24 @@ function imagesToPdf(rs, titre) {
   var nom = titre.replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim() + '.pdf';
   return new File([doc.output('blob')], nom, { type: 'application/pdf' });
 }
+
+/* V3.14 : une seule fois (patron) — la taille de la boîte passe du nom à la fiche (Produits.boite).
+   Produits rangés en boîtes par la 3.13 (« … (BOÎTE 500) », unité boîte) : le nom redevient celui de la facture.
+   Anciens produits de l'inventaire papier (« VIS ROCKET 6×120/70 (BOÎTE 100) ») : le nom ne change pas, la fiche retient 100. */
+function boitesVersFiche() {
+  if (typeof LOADED === 'undefined' || !LOADED || !isPatron() || D().reg.boites2 === '1') return;
+  var ops = [];
+  D().allProds.forEach(function (p) {
+    if (num(p.boite) > 0) return;
+    var mr = /\(ROULEAU\s*(\d+(?:[.,]\d+)?)\s*KG\)/i.exec(p.nom || '');
+    if (mr && p.unite === 'rouleau') { ops.push(put('Produits', { id: p.id, boite: String(num(mr[1].replace(',', '.'))), nom: String(p.nom).replace(mr[0], '').replace(/\s+/g, ' ').trim() })); return; }
+    var mb = /\b(?:BO[IÎ]TES?|BTE|PAQUETS?|PACK)\.?\s*(?:DE\s*)?(\d{2,5})\b/i.exec(p.nom || ''); if (!mb) return;
+    var n = +mb[1];
+    var ajoute = / \(BOÎTE \d+\)$/.test(p.nom);   // ajouté par la 3.13 (« … (BOÎTE 500) » en fin de nom) : on le retire ; sinon c'était sur la facture, on garde
+    if (p.unite === 'boîte') ops.push(put('Produits', ajoute ? { id: p.id, boite: String(n), nom: String(p.nom).replace(/ \(BOÎTE \d+\)$/, '') } : { id: p.id, boite: String(n) }));
+    else if (!p.unite) ops.push(put('Produits', { id: p.id, boite: String(n), unite: 'boîte' }));
+  });
+  ops.push(put('Reglages', { id: 'boites2', valeur: '1' }));
+  commit(ops);
+}
+(function () { var prev = window.onDataChange; window.onDataChange = function (x) { if (prev) prev(x); setTimeout(boitesVersFiche, 0); }; })();
