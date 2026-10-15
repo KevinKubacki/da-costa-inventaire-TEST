@@ -273,6 +273,135 @@ function tailleBoite(nom) {
   var m = /(?:bo[iî]tes?|bte|bt|paquets?|pqt|pack|sacs?|cartons?|lots?)\.?\s*(?:de\s*)?(\d{2,5})\b/i.exec(String(nom || ''));
   return m ? +m[1] : 0;
 }
+/* ---------- V3.13 : « on compte comme on achète » (décidé avec Kevin et Jimmy le 15/10) ----------
+   Des vis s'achètent en boîtes : le stock les compte en boîtes, au prix de la boîte, et le Bilan donne aussi les pièces.
+   Pour chaque ligne de facture, l'appli propose comment la ranger (Jimmy valide) :
+   1) le libellé donne la taille (« BOÎTE 100 », « BTE 200 », « SAC 25 ») → des boîtes de cette taille ;
+   2) quantité × prix lu = 100 ou 1 000 fois le montant de la ligne (prix « pour 100 ») → boîtes de 100 (ou 1 000) ;
+      ou petite visserie à moins de 0,50 € la pièce en quantité ronde → boîtes de 100 (50, 25) ;
+   3) au kilo → garder au kilo, ou compter en rouleaux (Jimmy donne le poids d'un rouleau) ;
+   sinon : à l'unité, rien à demander (un Velux est un Velux). */
+var MOTS_LOT = /\b(VIS|POINTES?|CLOUS?|CHEVILLES?|AGRAFES?|RIVETS?|TIREFONDS?|BOULONS?|ECROUS?|RONDELLES?)\b/;
+var RE_BOITE_NOM = /\s*\(?\b(?:BO[IÎ]TES?|BTE|BT|PAQUETS?|PQT|PACK|LOTS?)\.?\s*(?:DE\s*)?\d{2,5}\b\)?/i;
+function condProposee(L) {
+  var q = L.qte, n = tailleBoite(L.libelle) || tailleBoite(L.nom);
+  if (/^\s*(kg|kgs|kilo)/i.test(L.unite || '')) return { mode: 'kg' };
+  if (n > 1) { var enPieces = q >= n && Math.abs(q / n - Math.round(q / n)) < 1e-6; return { mode: 'boite', n: n, f: enPieces ? 1 / n : 1, src: 'libelle' }; }
+  if (L.puLu > 0 && L.montant > 0 && q > 0) {
+    var r = q * L.puLu / L.montant, m = [100, 1000].filter(function (x) { return r > x * 0.97 && r < x * 1.03; })[0];
+    if (m) return { mode: 'boite', n: m, f: 1 / m, src: 'cent' };
+  }
+  var nm = String(L.libelle + ' ' + (L.nom || '')).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  if (L.prix !== null && L.prix > 0 && L.prix < 0.5 && q >= 50 && MOTS_LOT.test(nm)) {
+    n = q % 100 === 0 ? 100 : q % 50 === 0 ? 50 : q % 25 === 0 ? 25 : 0;
+    if (n) return { mode: 'boite', n: n, f: 1 / n, src: 'petit' };
+  }
+  return null;
+}
+function nomSansBoite(nom) { return String(nom || '').replace(RE_BOITE_NOM, '').replace(/\s+/g, ' ').trim(); }
+function nomAvecBoite(nom, n) { return tailleBoite(nom) === n ? nom : nomSansBoite(nom) + ' (BOÎTE ' + n + ')'; }
+/** Ligne d'un NOUVEAU produit : applique le rangement choisi (boîtes de n, pièces, kilo, rouleaux de w kg). */
+function rangerComme(L, choix, n) {
+  var c = L.cond || {};
+  L.condChoix = choix;
+  if (choix === 'boite') { L.facteur = c.n === n && c.f === 1 ? 1 : 1 / n; L.condN = n; L.uStock = 'boîte'; L.nom = nomAvecBoite(L.nom, n); }
+  else if (choix === 'piece') { L.facteur = c.mode === 'boite' && c.f === 1 ? c.n : 1; L.condN = 0; L.uStock = ''; L.nom = nomSansBoite(L.nom); }
+  else if (choix === 'kg') { L.facteur = 1; L.condN = 0; L.uStock = 'kg'; }
+  else if (choix === 'rouleau') { L.facteur = 1 / n; L.condN = n; L.uStock = 'rouleau'; L.nom = nomSansBoite(L.nom).replace(/\s*\(ROULEAU[^)]*\)/i, '') + ' (ROULEAU ' + fq(n) + ' KG)'; }
+}
+/** Carte « produit compté à la pièce, la facture parle de boîtes ». */
+function condAlerte(l, p, al) {
+  var c = l.cond || {}, n = al.n, nb = c.f === 1 ? l.qte : l.qte / n, np = c.f === 1 ? l.qte * n : l.qte, stk = D().stock[l.pid] || 0;
+  var pb = l.prix !== null ? (c.f === 1 ? l.prix : l.prix * n) : null;
+  return '<div class="valerte vprix"><div class="vp-t">Ce produit est compté à la pièce</div>' +
+    '<p>Sur la facture : <b>' + fq(round3(nb)) + ' boîte' + (nb > 1 ? 's' : '') + ' de ' + fq(n) + '</b> (' + fq(np) + ' pièces)' + (pb !== null ? ', soit <b>' + fePu(pb) + ' la boîte</b>' : '') + '.</p>' +
+    '<p>Tu achètes ce produit en boîtes : le compter en boîtes est plus simple (stock, sorties, inventaire). Le Bilan donnera toujours aussi le nombre de pièces.</p>' +
+    (stk ? '<p>Le stock actuel (' + fq(stk) + ' pièces) devient ' + fq(round3(stk / n)) + ' boîte' + (stk / n > 1 ? 's' : '') + ', sans changer sa valeur.</p>' : '') +
+    '</div><div class="vp-q">Je le passe en boîtes de ' + fq(n) + ' ?</div>' +
+    '<button class="btn vp-b" data-a="vConv" data-v="oui" data-k="' + l.k + '"><b>Oui : + ' + fq(round3(nb)) + ' boîte' + (nb > 1 ? 's' : '') + ' de ' + fq(n) + '</b><span>le produit sera compté en boîtes (conseillé)</span></button>' +
+    '<button class="btn light vp-b" data-a="vCond" data-v="autre" data-k="' + l.k + '"><b>Oui, mais des boîtes d\'une autre taille…</b></button>' +
+    '<button class="btn light vp-b" data-a="vConv" data-v="non" data-k="' + l.k + '"><b>Non : + ' + fq(np) + ' pièces</b><span>garder ce produit à la pièce (je ne redemanderai plus)</span></button>' +
+    '<div class="vmini"><button data-a="vOther" data-k="' + l.k + '">Autre produit…</button><button data-a="vToNew" data-k="' + l.k + '">C\'est un nouveau</button></div>';
+}
+/** La ligne est rattachée (à la main) à un produit existant : on repart de la facture telle quelle, puis contrôles. */
+function versExistant(l) {
+  if (l.condChoix) { l.facteur = 1; l.condChoix = ''; l.uStock = ''; l.condN = 0; }
+  l.convertir = 0; l.gardePiece = false;
+  if (!condControle(l)) vControle(l);
+}
+/** Nouveau produit : la proposition la plus logique est appliquée d'office (Jimmy la voit et peut en changer avant « Créer »). */
+function condNouveau(L) {
+  var c = L.cond; if (!c) return;
+  if (c.mode === 'boite') rangerComme(L, 'boite', c.n); else rangerComme(L, 'kg', 0);
+}
+/** Ligne rapprochée d'un produit EXISTANT compté à la pièce alors que la facture parle de boîtes : proposer de le passer en boîtes (patron). */
+function condControle(L) {
+  if (L.statut !== 'ok' || !L.pid || L.alerteOk || L.facteur !== 1 || !isPatron()) return false;
+  var p = D().prod[L.pid], c = L.cond; if (!p || !c || c.mode !== 'boite' || tailleBoite(p.nom) > 1 || p.compte === 'piece') return false;
+  L.alerte = { type: 'cond', n: c.n }; L.statut = 'check'; L.cands = [L.pid]; return true;
+}
+A.vCond = function (d) {
+  var l = vLine(d.k); if (!l) return;
+  if (d.v === 'autre' || d.v === 'rouleau') {
+    askNumber({ title: d.v === 'rouleau' ? 'Un rouleau pèse combien de kilos ?' : 'Combien de pièces dans une boîte ?', text: d.v === 'rouleau' ? 'Regarde l\'étiquette d\'un rouleau. L\'appli comptera ce produit en rouleaux.' : 'Regarde sur la boîte. L\'appli comptera ce produit en boîtes.', value: d.v === 'rouleau' ? undefined : (l.condN || (l.cond && l.cond.n) || 100) }).then(function (n) {
+      if (!(n > 0)) return;
+      vSet(d.k, function (x) { if (x.statut === 'check' && x.alerte && x.alerte.type === 'cond') { x.convertir = n; x.condN = n; x.facteur = x.cond && x.cond.f === 1 ? 1 : 1 / n; x.uStock = 'boîte'; x.statut = 'ok'; x.alerte = null; x.alerteOk = true; } else rangerComme(x, d.v === 'rouleau' ? 'rouleau' : 'boite', n); });
+    });
+    return;
+  }
+  vSet(d.k, function (x) { rangerComme(x, d.v, num(d.n) || (x.cond && x.cond.n) || 0); });
+};
+/** Produit existant : « Oui, le passer en boîtes de n » / « Non, garder à la pièce » (retenu sur le produit). */
+A.vConv = function (d) {
+  vSet(d.k, function (l) {
+    var c = l.cond || {}, n = l.alerte && l.alerte.n || c.n;
+    if (d.v === 'oui') { l.convertir = n; l.facteur = c.f === 1 ? 1 : 1 / n; l.uStock = 'boîte'; }
+    else { l.gardePiece = true; l.facteur = c.f === 1 ? n : 1; }
+    l.statut = 'ok'; l.alerte = null; l.alerteOk = true;
+  });
+};
+/** Opérations pour passer un produit compté à la pièce en boîtes de n : nom, unité, seuil, tout l'historique (quantités ÷ n, prix × n),
+    prix des fournisseurs, conversions apprises et commande. Le stock garde exactement la même valeur. */
+function opsEnBoites(pid, n) {
+  var M = D(), p = M.prod[pid], ops = []; if (!p || !(n > 1)) return ops;
+  var r3 = function (x) { return String(round3(x)); };
+  var row = { id: pid, nom: nomAvecBoite(p.nom, n), unite: 'boîte' }; if (num(p.seuil) > 0) row.seuil = r3(Math.max(1, num(p.seuil) / n));
+  ops.push(put('Produits', row));
+  (M.movesBy[pid] || []).forEach(function (m) {
+    var r = { id: m.id, delta: r3(num(m.delta) / n) };
+    if (numOrNull(m.prix) !== null) r.prix = String(rnd5(num(m.prix) * n));
+    if (numOrNull(m.pu) !== null) r.pu = String(rnd5(num(m.pu) * n));
+    ops.push(put('Mouvements', r));
+  });
+  (M.prix[pid] || []).forEach(function (x) { if (numOrNull(x.prix) !== null) ops.push(put('Prix', { id: x.id, prix: String(rnd5(num(x.prix) * n)) })); });
+  Object.keys(M.alias).forEach(function (k) { var a = M.alias[k]; if (a.produit === pid) ops.push(put('Alias', { id: a.id, facteur: String(rnd5((num(a.facteur) || 1) / n)) })); });
+  if (M.cmd[pid]) ops.push(put('Commande', { id: M.cmd[pid].id, qte: r3(Math.max(1, num(M.cmd[pid].qte) / n)) }));
+  return ops;
+}
+/** Texte « 5 boîtes de 100 » / « 500 pièces » / « 23,5 kg » pour une ligne. */
+function rangeTxt(l) {
+  var q = l.qte * l.facteur;
+  if (l.uStock === 'boîte' || (l.statut === 'ok' && l.pid && tailleBoite((D().prod[l.pid] || {}).nom) > 1 && l.facteur !== 1)) { var n = l.condN || l.convertir || Math.round(1 / l.facteur) || tailleBoite((D().prod[l.pid] || {}).nom); return fq(round3(q)) + ' boîte' + (q > 1 ? 's' : '') + (n > 1 ? ' de ' + fq(n) : ''); }
+  if (l.uStock === 'rouleau') return fq(round3(q)) + ' rouleau' + (q > 1 ? 'x' : '') + ' de ' + fq(l.condN) + ' kg';
+  if (l.uStock === 'kg') return fq(q) + ' kg';
+  return fq(q) + (l.cond && l.cond.mode === 'boite' ? ' pièce' + (q > 1 ? 's' : '') : '');
+}
+/** Bloc « Comment tu le ranges ? » sur la carte d'un nouveau produit. */
+function condBloc(l) {
+  var c = l.cond; if (!c) return '';
+  var pu = function () { return l.prix !== null && isPatron() ? ' · ' + fePu(l.prix / l.facteur) + (l.uStock === 'boîte' ? ' la boîte' : l.uStock === 'rouleau' ? ' le rouleau' : l.uStock === 'kg' ? ' le kg' : ' pièce') : ''; };
+  var chip = function (v, n, t, on) { return '<button class="vcond' + (on ? ' on' : '') + '" data-a="vCond" data-k="' + l.k + '" data-v="' + v + '"' + (n ? ' data-n="' + n + '"' : '') + '>' + t + '</button>'; };
+  var h = '<div class="vrange"><div class="vr-t">En stock : <b>+ ' + esc(rangeTxt(l)) + '</b>' + pu() + '</div><div class="vr-chips">';
+  if (c.mode === 'boite') {
+    var nb = c.f === 1 ? l.qte : l.qte / c.n, np = c.f === 1 ? l.qte * c.n : l.qte;
+    h += chip('boite', c.n, fq(round3(nb)) + ' boîte' + (nb > 1 ? 's' : '') + ' de ' + fq(c.n), l.condChoix === 'boite' && l.condN === c.n) +
+      chip('autre', 0, l.condChoix === 'boite' && l.condN !== c.n ? 'Boîtes de ' + fq(l.condN) : 'Autre taille…', l.condChoix === 'boite' && l.condN !== c.n) +
+      chip('piece', 0, fq(np) + ' à la pièce', l.condChoix === 'piece');
+  } else {
+    h += chip('kg', 0, 'Au kilo', l.condChoix !== 'rouleau') + chip('rouleau', 0, l.condChoix === 'rouleau' ? 'Rouleaux de ' + fq(l.condN) + ' kg' : 'En rouleaux…', l.condChoix === 'rouleau');
+  }
+  return h + '</div></div>';
+}
 /** Fournisseur(s) d'un produit : son fournisseur habituel s'il en a un (c'est lui qui compte, même si un autre prix a été noté par erreur),
     sinon ceux qui ont un prix. Liste vide = produit sans fournisseur (ex. inventaire papier) : il peut servir à tout le monde. */
 function prodFours(pid) {
@@ -309,6 +438,32 @@ function totalLignes(V) {
 }
 A.vUnite = function (d) { vSet(d.k, function (l) { var n = l.alerte ? l.alerte.n : 1; l.facteur = 1 / n; l.statut = 'ok'; l.alerte = null; l.alerteOk = true; }); };
 A.vAlerteOk = function (d) { vSet(d.k, function (l) { l.statut = 'ok'; l.alerte = null; l.alerteOk = true; }); };
+/** V3.12 (retour de Kevin : « prix au cent ? » incompréhensible) : la carte « prix très différent » montre les deux prix en clair,
+    explique un écart de 100 ou 1000 fois (prix donné pour 100 pièces), dit si le montant de la ligne confirme le prix de la facture,
+    et demande simplement « Quel est le bon prix pour 1 pièce ? » avec un bouton par prix. */
+function prixAlerte(l, p, al) {
+  var u = l.prix / l.facteur, av = al.avant, uw = p && p.unite ? p.unite : 'pièce';
+  var cent = function (x) { return x < 0.1 ? ' <span class="vp-cent">soit ' + fe(x * 100) + ' les 100</span>' : ''; };
+  var pres = function (r, n) { return r > n * 0.9 && r < n * 1.1; };
+  var r = av / u, why = '';
+  [100, 1000].forEach(function (n) {
+    if (why) return;
+    if (pres(r, n)) why = 'C\'est <b>' + n + ' fois moins</b> qu\'avant. Les fournisseurs donnent souvent le prix <b>pour ' + n + ' pièces</b> : l\'ancien prix était sans doute celui de ' + n + ' pièces, pris pour celui d\'une seule.';
+    else if (pres(1 / r, n)) why = 'C\'est <b>' + n + ' fois plus</b> qu\'avant. Le prix écrit sur la facture est sans doute celui de <b>' + n + ' pièces</b>, pas d\'une seule.';
+  });
+  if (!why) why = 'C\'est <b>' + (u > av ? fq(Math.round(u / av * 10) / 10) + ' fois plus' : fq(Math.round(av / u * 10) / 10) + ' fois moins') + '</b> que d\'habitude.';
+  var conf = l.montant > 0 && Math.abs(l.qte * l.prix - l.montant) <= Math.max(0.02, l.montant * 0.01);
+  return '<div class="valerte vprix"><div class="vp-t">Le prix a beaucoup changé</div>' +
+    '<div class="vp-l"><span>Sur cette facture</span><b>' + fePu(u) + '</b> pour 1 ' + esc(uw) + cent(u) + '</div>' +
+    '<div class="vp-l"><span>Avant, dans l\'appli</span><b>' + fePu(av) + '</b> pour 1 ' + esc(uw) + cent(av) + '</div>' +
+    '<p>' + why + '</p>' +
+    (conf ? '<p class="vp-ok">' + ic('check') + 'La facture le confirme : ' + fq(l.qte) + ' × ' + fePu(l.prix) + ' = ' + fe(l.montant) + ', le montant écrit sur la ligne.</p>' : '<p>Regarde le montant de cette ligne sur la facture pour savoir lequel est juste.</p>') +
+    '</div><div class="vp-q">Quel est le bon prix pour 1 ' + esc(uw) + ' ?</div>' +
+    '<button class="btn vp-b" data-a="vAlerteOk" data-k="' + l.k + '"><b>' + fePu(u) + '</b><span>celui de la facture' + (conf ? ' (conseillé)' : '') + ' · la fiche sera corrigée</span></button>' +
+    '<button class="btn light vp-b" data-a="vPrixAvant" data-k="' + l.k + '"><b>' + fePu(av) + '</b><span>celui d\'avant</span></button>' +
+    '<div class="vmini"><button data-a="vQty" data-k="' + l.k + '">Autre prix…</button><button data-a="vOther" data-k="' + l.k + '">Autre produit…</button><button data-a="vToNew" data-k="' + l.k + '">C\'est un nouveau</button></div>';
+}
+A.vPrixAvant = function (d) { vSet(d.k, function (l) { if (l.alerte && l.alerte.avant) l.prix = rnd5(l.alerte.avant * l.facteur); l.statut = 'ok'; l.alerte = null; l.alerteOk = true; }); };
 /** Famille quand Gemini n'en propose pas : d'après le 1er mot qui parle (VIS… → Clous & vis), sinon Divers, sinon la 1re. */
 var FAM_MOTS = [['clous', /\b(VIS|POINTES?|CLOUS?|CHEVILLES?|TIREFONDS?|RIVETS?|BOULONS?|ECROUS?|AGRAFES?)\b/], ['plomb', /\bPLOMB\b/], ['ardoise', /\bARDOISES?\b/],
   ['fonte', /\bFONTE\b/], ['bois', /\b(VOLIGES?|BASTAINGS?|BASTINS?|CHEVRONS?|LITEAUX?|LITEAU|MADRIERS?|PLANCHES?)\b/], ['etancheite', /\b(MEMBRANES?|ECRAN|SILICONE|MASTIC|BITUME|ETANCH)/], ['zinc', /\b(ZINC|ZN|GOUTTIERES?|DESCENTES?|COUDES?)\b/]];
@@ -327,7 +482,7 @@ function buildVerif(doc) {
     if (prix !== null) prix = rnd5(prix);
     var L = { k: 'l' + i, libelle: String(l.libelle || '').trim(), ref: String(l.reference || '').trim(), qte: qte, unite: String(l.unite || '').trim(),
       prix: prix, facteur: num(l.conditionnement) > 0 ? num(l.conditionnement) : 1, pid: '', cands: [], statut: 'new',
-      nom: upName(l.nom_propose || l.libelle), famille: M.fam[l.famille_proposee] ? l.famille_proposee : famDevinee(l.nom_propose || l.libelle), source: '', montant: mt, prixCorr: corr };
+      nom: upName(l.nom_propose || l.libelle), famille: M.fam[l.famille_proposee] ? l.famille_proposee : famDevinee(l.nom_propose || l.libelle), source: '', montant: mt, prixCorr: corr, puLu: numOrNull(l.prix_unitaire_ht) };
     var al = four && M.alias[lineKey(four, L.libelle)];
     var byRef = four && L.ref ? Object.keys(M.prix).filter(function (pid) { return ok(pid) && M.prix[pid].some(function (x) { return x.fournisseur === four && x.ref && norm(x.ref) === norm(L.ref); }); })[0] : '';
     var pid = ok(l.produit_id), others = (l.autres_ids || []).map(ok).filter(Boolean);
@@ -337,7 +492,9 @@ function buildVerif(doc) {
     else if (pid) { L.statut = 'check'; L.cands = [pid].concat(others.filter(function (x) { return x !== pid; })).slice(0, 3); }
     else { L.statut = 'new'; L.cands = others.slice(0, 2); }
     unAutreFournisseur(L, four);
-    vControle(L);
+    L.cond = condProposee(L);
+    if (L.statut === 'new') condNouveau(L);
+    else if (!condControle(L)) vControle(L);
     return L;
   });
   return { source: 'facture', four: four, fourNom: upName(doc.fournisseur || ''), fourChoix: four ? 'ok' : '', numero: String(doc.numero || '').trim(),
@@ -389,19 +546,17 @@ SCREENS.verif = function () {
       var pa = M.prod[l.pid], al = l.alerte;
       html += '<div class="vcard check"><div class="vhead"><span class="dot check"></span>' + src + '</div>' +
         '<span class="vq check">' + esc(pa ? pa.nom : '?') + '</span>' +
-        (al.type === 'unite' ? '<div class="valerte">Ce produit est compté <b>par boîte de ' + al.n + '</b>, la facture compte <b>' + fq(l.qte) + ' pièces</b>.</div>' +
+        (al.type === 'cond' ? condAlerte(l, pa, al) : al.type === 'unite' ? '<div class="valerte">Ce produit est compté <b>par boîte de ' + al.n + '</b>, la facture compte <b>' + fq(l.qte) + ' pièces</b>.</div>' +
           '<button class="btn" style="height:48px;font-size:16px;font-family:Barlow;font-weight:700" data-a="vUnite" data-k="' + l.k + '">Oui : + ' + fq(round3(l.qte / al.n)) + ' boîte' + (l.qte / al.n > 1 ? 's' : '') + ' de ' + al.n + '</button>' +
           '<div class="vmini"><button data-a="vAlerteOk" data-k="' + l.k + '">Garder + ' + fq(l.qte) + '</button><button data-a="vOther" data-k="' + l.k + '">Autre produit…</button><button data-a="vToNew" data-k="' + l.k + '">C\'est un nouveau</button></div>'
-        : '<div class="valerte">Prix inhabituel : <b>' + fePu(l.prix / l.facteur) + '</b> l\'unité, d\'habitude <b>' + fePu(al.avant) + '</b>. Vérifie le prix sur la facture (prix au cent ?).</div>' +
-          '<div class="btn-row"><button class="btn light" style="height:48px" data-a="vQty" data-k="' + l.k + '">Corriger</button><button class="btn" style="height:48px;font-size:16px;font-family:Barlow;font-weight:700" data-a="vAlerteOk" data-k="' + l.k + '">Le prix est bon</button></div>' +
-          '<div class="vmini"><button data-a="vOther" data-k="' + l.k + '">Autre produit…</button><button data-a="vToNew" data-k="' + l.k + '">C\'est un nouveau</button></div>') + '</div>';
+        : prixAlerte(l, pa, al)) + '</div>';
     } else if (l.statut === 'check') {
       html += '<div class="vcard check"><div class="vhead"><span class="dot check"></span>' + src + '</div><span class="vq check">Je pense que c\'est :</span>' +
         l.cands.map(function (pid, i) { var p = M.prod[pid]; return '<button class="vcand ' + (i === 0 ? 'best' : '') + '" data-a="vPick" data-k="' + l.k + '" data-id="' + pid + '">' + esc(p.nom) + ' <span>· stock ' + fq(M.stock[pid] || 0) + '</span></button>'; }).join('') +
         '<div class="vmini"><button data-a="vOther" data-k="' + l.k + '">Autre produit…</button><button data-a="vToNew" data-k="' + l.k + '">C\'est un nouveau</button><button data-a="vSkip" data-k="' + l.k + '">Ignorer</button></div></div>';
     } else if (l.statut === 'new') {
       html += '<div class="vcard new"><div class="vhead"><span class="dot new"></span>' + src + '</div><span class="vq new">Nouveau produit : je le crée ?</span>' +
-        '<button class="vnew" data-a="vName" data-k="' + l.k + '"><b>' + esc(l.nom) + '</b><span>' + esc(famName(l.famille) + ' · ' + (V.four ? fourName(V.four) : V.fourNom) + (l.prix !== null ? ' · ' + fePu(l.prix / l.facteur) + ' HT' : '') + ' · + ' + fq(l.qte * l.facteur)) + ' · <u>modifier</u></span></button>' +
+        '<button class="vnew" data-a="vName" data-k="' + l.k + '"><b>' + esc(l.nom) + '</b><span>' + esc(famName(l.famille) + ' · ' + (V.four ? fourName(V.four) : V.fourNom) + (l.prix !== null && !l.cond ? ' · ' + fePu(l.prix / l.facteur) + ' HT' : '') + (l.cond ? '' : ' · + ' + fq(l.qte * l.facteur))) + ' · <u>modifier</u></span></button>' + condBloc(l) +
         '<div class="btn-row"><button class="btn" style="background:#2F5BD3;font-family:Barlow;font-weight:700;font-size:16px;height:48px" data-a="vCreate" data-k="' + l.k + '">Créer</button><button class="btn light" style="height:48px" data-a="vOther" data-k="' + l.k + '">C\'est un existant</button></div>' +
         (l.cands.length ? '<div class="vmini" style="margin-top:6px">' + l.cands.map(function (pid) { return '<button data-a="vPick" data-k="' + l.k + '" data-id="' + pid + '">' + esc(M.prod[pid].nom) + ' ?</button>'; }).join('') + '</div>' : '') +
         '<div class="vmini"><button data-a="vSkip" data-k="' + l.k + '">Ignorer cette ligne</button></div></div>';
@@ -413,8 +568,9 @@ SCREENS.verif = function () {
       html += '<button class="vcard ok" data-a="vLineMenu" data-k="' + l.k + '"><span class="dot ' + (l.statut === 'create' ? 'new' : 'ok') + '"></span><span class="grow"><span class="t">' + esc(p ? p.nom : '?') +
         (l.statut === 'create' ? ' <span class="badge" style="background:#DCE6FF;color:#1E3A8A">nouveau</span>' : '') + '</span>' +
         '<span class="s">' + (l.source === 'appris' ? 'reconnu (déjà vu) · ' : l.source === 'réf.' ? 'reconnu par la réf. · ' : '') + 'Facture : ' + esc(l.libelle) + (l.facteur !== 1 ? ' · ' + fq(l.qte) + ' × ' + fq(l.facteur) : '') +
-        (l.statut === 'create' ? '' : ' · stock ' + fq(q) + ' → ' + fq(q + l.qte * l.facteur)) + '</span></span>' +
-        '<span class="vqty"><b>+' + fq(l.qte * l.facteur) + '</b>' + (l.prix !== null ? '<span>' + fePu(l.prix / l.facteur) + '</span>' : '') + '</span></button>';
+        (l.convertir > 1 ? ' · <b>passe en boîtes de ' + fq(l.convertir) + '</b>' : '') +
+        (l.statut === 'create' ? '' : ' · stock ' + fq(round3(l.convertir > 1 ? q / l.convertir : q)) + ' → ' + fq(round3((l.convertir > 1 ? q / l.convertir : q) + l.qte * l.facteur))) + '</span></span>' +
+        '<span class="vqty"><b>+' + fq(round3(l.qte * l.facteur)) + '</b>' + (l.uStock === 'boîte' || l.convertir > 1 ? '<span>boîte' + (l.qte * l.facteur > 1 ? 's' : '') + '</span>' : l.uStock ? '<span>' + esc(l.uStock) + '</span>' : '') + (l.prix !== null ? '<span>' + fePu(l.prix / l.facteur) + '</span>' : '') + '</span></button>';
     }
   });
   var left = vPending(), n = V.lignes.filter(function (l) { return l.statut === 'ok' || l.statut === 'create'; }).length;
@@ -426,12 +582,12 @@ SCREENS.verif = function () {
 };
 function vSet(k, fn) { var l = vLine(k); if (!l) return; fn(l); saveVerif(); render(false); }
 A.vBack = function () { go('facture', {}, { replace: true }); };
-A.vPick = function (d) { vSet(d.k, function (l) { l.pid = d.id; l.statut = 'ok'; l.source = ''; l.alerte = null; l.alerteOk = false; vControle(l); }); };
+A.vPick = function (d) { vSet(d.k, function (l) { l.pid = d.id; l.statut = 'ok'; l.source = ''; l.alerte = null; l.alerteOk = false; versExistant(l); }); };
 A.vSkip = function (d) { vSet(d.k, function (l) { l.prev = l.statut; l.statut = 'skip'; }); };
 A.vUnskip = function (d) { vSet(d.k, function (l) { l.statut = l.pid ? 'ok' : (l.prev === 'create' ? 'create' : 'new'); }); };
-A.vToNew = function (d) { vSet(d.k, function (l) { l.statut = 'new'; l.pid = ''; }); };
+A.vToNew = function (d) { vSet(d.k, function (l) { l.statut = 'new'; l.pid = ''; l.alerte = null; l.convertir = 0; l.gardePiece = false; l.facteur = 1; condNouveau(l); }); };
 A.vCreate = function (d) { vSet(d.k, function (l) { l.statut = 'create'; l.pid = ''; }); };
-A.vOther = function (d) { openPicker('Quel produit ?', vLine(d.k).libelle, function (pid) { vSet(d.k, function (l) { l.pid = pid; l.statut = 'ok'; l.source = 'choisi'; l.alerte = null; l.alerteOk = false; vControle(l); }); }); };
+A.vOther = function (d) { openPicker('Quel produit ?', vLine(d.k).libelle, function (pid) { vSet(d.k, function (l) { l.pid = pid; l.statut = 'ok'; l.source = 'choisi'; l.alerte = null; l.alerteOk = false; versExistant(l); }); }); };
 A.vName = function (d) {
   var l = vLine(d.k), M = D();
   openSheet('<h3>Nouveau produit</h3><p>Sur la facture : ' + esc(l.libelle) + '</p>' +
@@ -514,7 +670,8 @@ function rematchAlias() {
     var al = M.alias[lineKey(VERIF.four, l.libelle)];
     if (al && M.prod[al.produit] && (l.statut === 'check' || l.statut === 'new')) { l.pid = al.produit; l.facteur = num(al.facteur) || 1; l.statut = 'ok'; l.source = 'appris'; }
     unAutreFournisseur(l, VERIF.four);
-    if (l.statut === 'ok' && l.source === 'appris') vControle(l);
+    if (l.statut === 'new' && !l.condChoix) condNouveau(l);
+    if (l.statut === 'ok' && l.source === 'appris' && !condControle(l)) vControle(l);
   });
 }
 A.vCancel = function () {
@@ -533,9 +690,11 @@ A.vValidate = function () {
   V.lignes.forEach(function (l) {
     if (l.statut !== 'ok' && l.statut !== 'create') return;
     var pid = l.pid, unitPrice = l.prix !== null ? rnd5(l.prix / l.facteur) : null;
+    if (l.convertir > 1) ops = ops.concat(opsEnBoites(pid, l.convertir));          // V3.13 : produit passé en boîtes
+    if (l.gardePiece) ops.push(put('Produits', { id: pid, compte: 'piece' }));       // ne plus le proposer pour ce produit
     if (l.statut === 'create') {
       pid = uid('p');
-      ops.push(put('Produits', { id: pid, nom: upName(l.nom), famille: l.famille, sfam: sfamDevinee(l.nom, l.famille), unite: '', seuil: '0', four: four, ref: '', notes: '', actif: '1', cree: now }));
+      ops.push(put('Produits', { id: pid, nom: upName(l.nom), famille: l.famille, sfam: sfamDevinee(l.nom, l.famille), unite: l.uStock || '', seuil: '0', four: four, ref: '', notes: '', actif: '1', cree: now }));
     } else if (M.prod[pid] && !M.prod[pid].four) ops.push(put('Produits', { id: pid, four: four }));
     ops.push(put('Mouvements', { id: uid('m'), date: now, produit: pid, delta: String(round3(l.qte * l.facteur)), type: 'entree', qui: ME, lieu: lab, fournisseur: four, prix: unitPrice === null ? '' : String(unitPrice), note: fid }));
     var ex = (M.prix[pid] || []).filter(function (x) { return x.fournisseur === four; })[0];

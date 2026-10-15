@@ -161,8 +161,13 @@ function pill(p) {
   var M = D(), q = M.stock[p.id] || 0, e = M.etat[p.id];
   return '<span class="pill ' + (e === 'ok' ? '' : e) + '">' + fq(q) + (p.unite ? '<small>' + esc(p.unite) + '</small>' : '') + '</span>';
 }
+/** V3.13 : produit compté en boîtes (« (BOÎTE 100) » dans le nom) → unité « boîtes » et nombre de pièces à côté. */
+function boiteDe(p) { return typeof tailleBoite === 'function' && p ? tailleBoite(p.nom) : 0; }
+function uniteDe(p, q) { var u = p && p.unite || ''; if (boiteDe(p) > 1 && (!u || /^bo[iî]te/i.test(u))) return 'boîte' + (Math.abs(q) > 1 ? 's' : ''); return u; }
+function piecesDe(p, q) { var n = boiteDe(p); return n > 1 && q ? fq(round3(q * n)) + ' pièces' : ''; }
 function prodSub(p) {
   var M = D(), e = M.etat[p.id], s = [famSf(p)];
+  if (piecesDe(p, M.stock[p.id] || 0)) s.push(piecesDe(p, M.stock[p.id] || 0));
   if (p.four) s.push(fourName(p.four));
   if (isPatron()) { var pr = prixRef(p.id); if (pr) s.push(fe(pr.prix)); }
   if (e === 'bas') s.push('stock bas'); else if (e === 'rupt') s.push('rupture');
@@ -624,7 +629,7 @@ SCREENS.prod = function (p) {
     (patron ? '<button class="icon-btn" data-a="editProd" aria-label="Modifier">' + ic('edit') + '</button>' : '') + '</div>' +
     '<div class="sub" style="font-weight:600;letter-spacing:.04em">' + esc([famName(pr.famille), fourName(pr.four)].filter(Boolean).join(' · ').toUpperCase()) + '</div>' +
     '<h1 style="font-size:29px">' + esc(pr.nom) + '</h1>' +
-    '<div class="big-qty"><b>' + fq(q) + '</b><div class="grow"><span class="sub">' + esc(pr.unite || 'en stock') + (pr.unite ? ' en stock' : '') + '</span>' + badge + '</div></div></header>' +
+    '<div class="big-qty"><b>' + fq(q) + '</b><div class="grow"><span class="sub">' + esc(uniteDe(pr, q) || 'en stock') + (uniteDe(pr, q) ? ' en stock' : '') + (piecesDe(pr, q) ? ' · ' + piecesDe(pr, q) : '') + '</span>' + badge + '</div></div></header>' +
     '<div class="pf-under"><div class="over-actions"><button style="background:var(--red)" data-a="prodMv" data-m="S">− Sortie</button><button style="background:var(--green)" data-a="prodMv" data-m="E">+ Entrée</button></div>' +
     '<div class="card pf-card"><div class="kv"><span style="display:flex;flex-direction:column"><span style="color:var(--ink);font-weight:600">Seuil d\'alerte</span><span style="font-size:13px">' +
     (seuil > 0 ? 'Alerte quand il en reste ' + fq(seuil) + ' ou moins' : 'Pas d\'alerte pour ce produit') + '</span></span>' +

@@ -670,6 +670,18 @@ body.wide .ch-detail{position:sticky;top:12px;background:var(--bg);}
 .vx-bilan .vb-tot{text-align:right}.vx-bilan .vb-tot b{display:block;font-family:var(--cond);font-weight:800;font-size:24px;color:var(--navy)}.vx-bilan .vb-tot span{font-size:12px;color:var(--muted)}
 .vx-bilan .btn{width:100%}
 .valerte{background:var(--orange-bg);color:#7A3D00;border-radius:10px;padding:10px 12px;font-size:15px;line-height:1.4;margin:8px 0}
+.vprix .vp-t{font-weight:700;font-size:16px;margin-bottom:6px}
+.vprix .vp-l{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 6px;padding:6px 0;border-top:1px solid rgba(122,61,0,.15)}
+.vprix .vp-l>span:first-child{flex:0 0 100%;font-size:13px;opacity:.8}
+.vprix .vp-l b{font-size:18px}
+.vprix .vp-cent{font-size:13px;opacity:.85}
+.vprix p{margin:6px 0 0}
+.vprix .vp-ok{color:var(--green-ink,#157F4A);display:flex;gap:6px;align-items:flex-start}
+.vprix .vp-ok svg{width:18px;height:18px;flex:0 0 18px;margin-top:1px}
+.vp-q{font-weight:700;font-size:16px;margin:12px 0 8px}
+.vp-b{display:flex;flex-direction:column;align-items:center;justify-content:center;height:auto;min-height:56px;padding:8px 12px;width:100%;margin-bottom:8px;gap:2px}
+.vp-b b{font-size:18px;font-family:Barlow;font-weight:700}
+.vp-b span{font-size:13px;font-weight:400;opacity:.9}
 .vtotal-ok{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:var(--green-ink);margin:0 4px 10px}.vtotal-ok svg{width:18px;height:18px}
 
 /* V3.11 : sous-familles */
@@ -732,3 +744,10 @@ button.bl-row{cursor:pointer}
 .bl-es .t{text-align:left;font-weight:600;overflow-wrap:anywhere}
 .bl-es small{display:block;color:var(--muted);font-size:12px}
 .fam-row .grow>div:first-child{display:flex;flex-direction:column;gap:2px;cursor:pointer}
+/* V3.13 : comment ranger une ligne de facture (boîtes / pièces / kilo / rouleaux) */
+.vrange{background:#F4F6FF;border:1px solid #DCE3FB;border-radius:12px;padding:10px 12px;margin:8px 0}
+.vrange .vr-t{font-size:15px;margin-bottom:8px}
+.vrange .vr-chips{display:flex;flex-wrap:wrap;gap:8px}
+.vcond{border:1.5px solid #C9D3F5;background:#fff;color:#1E3A8A;border-radius:999px;padding:9px 14px;font:600 15px Barlow,sans-serif;min-height:42px}
+.vcond.on{background:#2F5BD3;border-color:#2F5BD3;color:#fff}
+.boite-pcs{color:var(--muted);font-weight:400}

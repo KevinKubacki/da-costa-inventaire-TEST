@@ -43,12 +43,12 @@ function blRetour(m) { return m.type === 'entree' && (!!m.chantier || norm(m.lie
 /** Quantité « parlante » : un produit vendu par boîte de 100 compte 100 pièces par boîte. */
 function blUnite(pr, q) {
   var n = typeof tailleBoite === 'function' ? tailleBoite(pr.nom) : 0;
-  if (n > 1) return { u: 'pièces', q: q * n };
+  if (n > 1) return { u: 'pièces', q: q * n, b: q, n: n };
   return { u: pr.unite || 'u', q: q };
 }
 function blAjoute(map, u, q) { map[u] = (map[u] || 0) + q; }
 function fN(n) { return Number(Math.round(n * 100) / 100).toLocaleString('fr-FR', { maximumFractionDigits: 2 }); }
-function blQtes(map) { return Object.keys(map).sort(function (a, b) { return map[b] - map[a]; }).map(function (u) { return fN(map[u]) + ' ' + u; }).join(' · '); }
+function blQtes(map) { return Object.keys(map).sort(function (a, b) { return a === 'boîtes' ? -1 : b === 'boîtes' ? 1 : map[b] - map[a]; }).map(function (u) { return fN(map[u]) + ' ' + u; }).join(' · '); }
 function blAn(mt, P) { return P.partiel ? Math.round(mt * 365 / P.jours) : mt; }
 
 var BLM = { k: '' };
@@ -67,9 +67,9 @@ function blCalc(p) {
       var f = m.fournisseur || pr.four || '', px = numOrNull(m.prix), u = blUnite(pr, q);
       e.entre += q;
       var k = m.produit + '|' + f, a = R.prod[k] = R.prod[k] || { pid: m.produit, four: f, q: 0, qp: 0, mt: 0, last: null, n: 0 };
-      a.q += q; a.n++; R.nAch++; blAjoute(R.qt, u.u, u.q);
+      a.q += q; a.n++; R.nAch++; blAjoute(R.qt, u.u, u.q); if (u.b) blAjoute(R.qt, 'boîtes', u.b);
       var F = R.four[f] = R.four[f] || { id: f, mt: 0, qt: {}, prods: {} };
-      blAjoute(F.qt, u.u, u.q); F.prods[m.produit] = 1;
+      blAjoute(F.qt, u.u, u.q); if (u.b) blAjoute(F.qt, 'boîtes', u.b); F.prods[m.produit] = 1;
       if (px !== null) {
         var mt = q * px; a.mt += mt; a.qp += q; R.mt += mt; F.mt += mt; e.entreMt += mt;
         if (!a.last || m.date > a.last.date) a.last = { date: m.date, prix: px };
@@ -185,7 +185,7 @@ function blAchats(p) {
     R.prods.slice(0, n).map(function (a) {
       var pr = D().prod[a.pid] || { nom: '?' }, u = blUnite(pr, a.q), pm = a.qp ? a.mt / a.qp : null;
       return '<button class="bl-row bl-prod" data-a="openProd" data-id="' + a.pid + '"><div class="grow"><div class="bl-l1"><span class="t">' + esc(pr.nom) + '</span><b>' + (a.mt ? fe(a.mt) : '—') + '</b></div>' +
-        '<span class="s">' + esc(blFourNom(a.four)) + ' · ' + fN(u.q) + ' ' + u.u + (pm !== null ? ' · prix moyen ' + fePu(pm) + (a.last && Math.abs(a.last.prix - pm) > 1e-6 ? ' · dernier ' + fePu(a.last.prix) : '') : ' · sans prix') + '</span></div></button>';
+        '<span class="s">' + esc(blFourNom(a.four)) + ' · ' + (u.b ? fN(u.b) + ' boîte' + (u.b > 1 ? 's' : '') + ' de ' + u.n + ' = ' : '') + fN(u.q) + ' ' + u.u + (pm !== null ? ' · prix moyen ' + fePu(pm) + (u.b ? ' la boîte' : '') + (a.last && Math.abs(a.last.prix - pm) > 1e-6 ? ' · dernier ' + fePu(a.last.prix) : '') : ' · sans prix') + '</span></div></button>';
     }).join('') +
     (R.prods.length > 10 ? '<button class="btn light" style="margin-top:8px" data-a="blAll">' + (p.all ? 'Voir les 10 premiers' : 'Voir les ' + R.prods.length + ' produits') + '</button>' : '') + '</section>';
   h += '<p class="bl-note" style="margin:4px 2px 16px">Pour négocier : choisis une famille ou une sous-famille (ex. Clous & vis › Vis), ou tape un mot. Le total, sa part chez chaque fournisseur et les prix moyens se mettent à jour.</p>';
@@ -196,10 +196,10 @@ A.blCsv = function () {
   var R = blCalc(VIEW.p), M = D(), P = R.P;
   var cell = function (v) { v = String(v == null ? '' : v); return /[;"\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
   var nb = function (n) { return n === null || n === undefined ? '' : String(Math.round(n * 10000) / 10000).replace('.', ','); };
-  var rows = [['Produit', 'Famille', 'Sous-famille', 'Fournisseur', 'Réf.', 'Quantité achetée', 'Unité', 'Montant HT', 'Prix moyen HT', 'Dernier prix HT', 'Dernier achat']];
+  var rows = [['Produit', 'Famille', 'Sous-famille', 'Fournisseur', 'Réf.', 'Boîtes achetées', 'Quantité achetée', 'Unité', 'Montant HT', 'Prix moyen HT', 'Dernier prix HT', 'Dernier achat']];
   R.prods.forEach(function (a) {
     var pr = M.prod[a.pid] || {}, u = blUnite(pr, a.q), px = (M.prix[a.pid] || []).filter(function (x) { return x.fournisseur === a.four; })[0];
-    rows.push([pr.nom, famName(pr.famille), sfamName(pr.sfam), blFourNom(a.four), px ? px.ref : '', nb(u.q), u.u, nb(a.mt), a.qp ? nb(a.mt / a.qp) : '', a.last ? nb(a.last.prix) : '', a.last ? fday(a.last.date) : '']);
+    rows.push([pr.nom, famName(pr.famille), sfamName(pr.sfam), blFourNom(a.four), px ? px.ref : '', u.b ? nb(u.b) : '', nb(u.q), u.u, nb(a.mt), a.qp ? nb(a.mt / a.qp) : '', a.last ? nb(a.last.prix) : '', a.last ? fday(a.last.date) : '']);
   });
   var csv = '﻿' + rows.map(function (r) { return r.map(cell).join(';'); }).join('\r\n');
   downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'Achats_' + P.deb + '_' + P.fin + '.csv');
